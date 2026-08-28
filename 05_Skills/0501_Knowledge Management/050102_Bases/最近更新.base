@@ -1,0 +1,30 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'file.folder != "05_Skills/0501_Knowledge Management/050101_Templates"'
+properties:
+  file.name:
+    displayName: 笔记
+  file.folder:
+    displayName: 目录
+  file.mtime:
+    displayName: 最近修改
+  note.type:
+    displayName: 类型
+  note.status:
+    displayName: 状态
+  note.domain:
+    displayName: 领域
+views:
+  - type: table
+    name: 最近更新
+    order:
+      - file.name
+      - file.folder
+      - file.mtime
+      - note.type
+      - note.status
+      - note.domain
+    sort:
+      - property: file.mtime
+        direction: DESC

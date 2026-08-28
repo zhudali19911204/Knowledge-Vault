@@ -1,0 +1,32 @@
+filters:
+  and:
+    - 'file.inFolder("01_Inbox")'
+    - 'file.ext == "md"'
+    - 'file.name != "_Inbox 使用说明.md"'
+properties:
+  file.name:
+    displayName: 笔记
+  note.created:
+    displayName: 创建时间
+  note.source:
+    displayName: 来源
+  note.status:
+    displayName: 状态
+  note.route_to:
+    displayName: 建议目录
+  note.route_confidence:
+    displayName: 置信度
+views:
+  - type: table
+    name: Inbox 待处理
+    order:
+      - file.name
+      - note.created
+      - note.source
+      - note.status
+      - note.route_to
+      - note.route_confidence
+    sort:
+      - property: note.created
+        direction: DESC
+

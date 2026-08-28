@@ -1,0 +1,9 @@
+# Local runtime and UI state
+.venv/
+__pycache__/
+*.pyc
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/cache/
+.DS_Store
+Thumbs.db

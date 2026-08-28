@@ -1,0 +1,30 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - 'note.review_after != null'
+    - 'note.review_after <= today()'
+    - 'note.status != "archived"'
+properties:
+  file.name:
+    displayName: 笔记
+  note.review_after:
+    displayName: 复习日期
+  note.maturity:
+    displayName: 成熟度
+  note.domain:
+    displayName: 领域
+  note.status:
+    displayName: 状态
+views:
+  - type: table
+    name: 到期复习
+    order:
+      - file.name
+      - note.review_after
+      - note.maturity
+      - note.domain
+      - note.status
+    sort:
+      - property: note.review_after
+        direction: ASC
+
