@@ -1,0 +1,6 @@
+# Generated into the per-user runtime directory by Start-DeepSeekHarness.ps1.
+# The workspace package is linked by pnpm so its Host and Web halves can load
+# from any installation directory without editing node_modules.
+- insert:
+    - id: knowledge-vault-bootstrap
+      name: '@knowledge-vault/dsh-bootstrap'

@@ -1,0 +1,21 @@
+---
+name: vault-retrieve
+description: 当用户的问题可能与当前 Obsidian Vault 已有知识有关时使用。按根路由索引和主题索引做小范围只读检索，并区分库内结论与 AI 补充；不用于收集、整理或改写笔记。
+whenToUse: 用户询问专业知识、业务规则、项目资料、既有决策、SOP 或其他可能已进入本 Vault 的内容时。
+user-invocable: true
+---
+
+# Vault 检索与问答
+
+先遵守根目录 `AGENTS.md` 的“AI 问答自动检索协议”。本技能只负责只读检索和回答，不授权写入或整理知识库。
+
+1. 从 Vault 根目录开始，读取 `知识路由索引.md`。
+2. 按 `description`、`use_when`、`do_not_use_when` 匹配最相关的 1–3 个知识包，排除明确不适用的条目。
+3. 打开候选目录的 `_Index.md`，从文档路由表选 1 篇主文档；最多再读取 3 篇 `related` 文档。
+4. 优先使用 `status: evergreen` 或 `processed` 且 `retrieval_priority: high/normal` 的正式知识。
+5. 正式知识不足时才沿 `source_notes` 回看来源；不要把 `06_Archive` 或低优先级来源作为默认答案。
+6. 如检索到图片或图表，使用当前可用工具实际读取；不能读取时明确说明。
+7. 回答末尾列出实际使用的 Vault 文档，并明确区分“知识库已有结论”和“AI 补充说明”。
+8. 没有可靠匹配时如实说明，不伪造文档、链接或库内结论。
+
+不要在此流程中创建、移动、删除、合并或批量改写任何文件。

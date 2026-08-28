@@ -1,9 +1,15 @@
 # Local runtime and UI state
 .venv/
+node_modules/
+.pnpm-store/
+dist/
 __pycache__/
 *.pyc
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
 .obsidian/cache/
+vault-template/.obsidian/workspace.json
+vault-template/.obsidian/workspace-mobile.json
+vault-template/.obsidian/cache/
 .DS_Store
 Thumbs.db

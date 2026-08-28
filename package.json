@@ -1,0 +1,21 @@
+{
+  "name": "knowledge-vault-harness",
+  "version": "1.1.0",
+  "private": true,
+  "description": "A distributable Obsidian knowledge vault powered by DeepSeek Harness.",
+  "license": "MIT",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "audit": "python vault-template/.agents/scripts/knowledge_router.py --audit",
+    "dsh:help": "dsh --help",
+    "test": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./Test-KnowledgeBase.ps1",
+    "build:dist": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ./Build-Distribution.ps1"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.1-rc.2",
+    "@knowledge-vault/dsh-bootstrap": "workspace:*"
+  }
+}

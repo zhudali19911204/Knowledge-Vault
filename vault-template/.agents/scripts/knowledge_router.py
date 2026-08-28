@@ -355,7 +355,20 @@ def markdown_notes(vault: Path) -> list[Path]:
     notes: list[Path] = []
     for path in vault.rglob("*.md"):
         relative_parts = path.relative_to(vault).parts
-        if ".git" in relative_parts or ".obsidian" in relative_parts:
+        if any(
+            runtime_directory in relative_parts
+            for runtime_directory in (
+                ".agents",
+                ".codex",
+                ".dsh",
+                ".git",
+                ".obsidian",
+                ".pnpm-store",
+                ".venv",
+                "dist",
+                "node_modules",
+            )
+        ):
             continue
         if any(
             part == "Templates" or part.endswith("_Templates")
