@@ -24,6 +24,8 @@ import {
 const name = "knowledge-vault-bootstrap";
 const inject = ["workspaceRegistry", "webServer"];
 const API_PREFIX = "/knowledge-vault/api";
+const BRAND_LOGO_ROUTE = "/knowledge-vault/assets/bkcs-logo.png";
+const BRAND_LOGO_SOURCE = new URL("./assets/bkcs-logo.png", import.meta.url);
 const MAX_PREVIEW_BYTES = 1024 * 1024;
 const MAX_INITIALIZE_BODY_BYTES = 16 * 1024;
 const TEXT_EXTENSIONS = new Set([
@@ -423,8 +425,24 @@ function createSelectionHandler(ctx, state) {
   };
 }
 
+function createBrandLogoHandler(logoBytes) {
+  return (req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      sendJson(res, 405, { error: "Method not allowed." });
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader("content-type", "image/png");
+    res.setHeader("content-length", String(logoBytes.length));
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    res.end(req.method === "HEAD" ? undefined : logoBytes);
+  };
+}
+
 async function apply(ctx) {
   const state = { vaultRoot: await resolveVaultRoot() };
+  const brandLogo = await readFile(BRAND_LOGO_SOURCE);
 
   await ctx.effect(async () => {
     let workspace = await ctx.workspaceRegistry.resolveByPath(state.vaultRoot);
@@ -468,13 +486,19 @@ async function apply(ctx) {
       path: `${API_PREFIX}/select`,
       handler: createSelectionHandler(ctx, state),
     });
+    const disposeBrandLogo = ctx.webServer.register({
+      kind: "exact",
+      path: BRAND_LOGO_ROUTE,
+      handler: createBrandLogoHandler(brandLogo),
+    });
     return () => {
+      disposeBrandLogo();
       disposeSelect();
       disposeInitialize();
       disposeFile();
       disposeList();
     };
-  }, "knowledge-vault-bootstrap: Vault browser, initializer, and selector API");
+  }, "knowledge-vault-bootstrap: Vault browser, initializer, selector, and brand asset");
 }
 
 export { apply, inject, name };

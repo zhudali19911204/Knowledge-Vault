@@ -8,12 +8,14 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const e = React.createElement;
     const API_PREFIX = "/knowledge-vault/api";
+    const BRAND_LOGO_URL = "/knowledge-vault/assets/bkcs-logo.png";
     const STYLE_ID = "@knowledge-vault/dsh-bootstrap/client.css";
     const css = `
       :root{--kv-browser-width:360px}
       @media(max-width:1200px){:root{--kv-browser-width:320px}}
       .kv-brand-mark{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;background:linear-gradient(145deg,#315b4c,#79a789);color:#fff;font-size:14px;font-weight:700;box-shadow:0 4px 14px #315b4c33}
       .kv-brand-name{font-size:15px;font-weight:650;letter-spacing:.02em;color:var(--dsw-alias-label-primary);white-space:nowrap}
+      .kv-hero-logo{display:block;width:min(258px,70vw);height:auto;object-fit:contain;border-radius:5px}
       .kv-init-launcher{box-sizing:border-box;flex:none;margin:0 2px 8px;min-width:0;display:flex;flex-direction:column;gap:8px}
       .kv-init-button{box-sizing:border-box;width:100%;height:38px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-button-elevated-fill);color:var(--dsw-alias-label-primary);display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 12px;cursor:pointer;font:500 14px/22px var(--dsw-font-family);white-space:nowrap;overflow:hidden}
       .kv-init-button:hover{background:var(--dsw-alias-button-floating-hover)}
@@ -376,6 +378,51 @@ window.__ModuleLoader__.load({
       return e("span", { className: "kv-brand-name" }, "Knowledge Vault");
     }
 
+    function HeroBrandMark() {
+      const logoRef = React.useRef(null);
+      React.useLayoutEffect(() => {
+        const logo = logoRef.current;
+        const headline = logo?.closest('[class*="_headline"]');
+        const hitbox = logo?.closest('[class*="_fishHitbox"]') || headline?.firstElementChild;
+        if (!headline || !hitbox) return undefined;
+
+        const headlineStyle = headline.getAttribute("style");
+        const hitboxStyle = hitbox.getAttribute("style");
+        const hiddenSiblings = Array.from(headline.children).filter((child) => child !== hitbox);
+        const siblingStyles = hiddenSiblings.map((child) => child.getAttribute("style"));
+
+        headline.style.gridTemplateColumns = "auto";
+        hitbox.style.gridArea = "1 / 1";
+        hitbox.style.justifySelf = "center";
+        hitbox.style.width = "min(258px, 70vw)";
+        hitbox.style.height = "auto";
+        hiddenSiblings.forEach((child) => {
+          child.style.display = "none";
+        });
+
+        return () => {
+          if (headlineStyle === null) headline.removeAttribute("style");
+          else headline.setAttribute("style", headlineStyle);
+          if (hitboxStyle === null) hitbox.removeAttribute("style");
+          else hitbox.setAttribute("style", hitboxStyle);
+          hiddenSiblings.forEach((child, index) => {
+            const style = siblingStyles[index];
+            if (style === null) child.removeAttribute("style");
+            else child.setAttribute("style", style);
+          });
+        };
+      }, []);
+
+      return e("img", {
+        ref: logoRef,
+        className: "kv-hero-logo",
+        src: BRAND_LOGO_URL,
+        alt: "贝内克长顺 · BENECKE CHANGSHUN",
+        width: 258,
+        height: 82,
+      });
+    }
+
     const inject = ["slots", "workspaces"];
     function apply(ctx) {
       const InitializationLauncher = createInitializationLauncher(ctx);
@@ -391,6 +438,7 @@ window.__ModuleLoader__.load({
       }, InitializationLauncher));
       ctx.slots.inject("sidebar.brand.mark", () => ctx.slots.register({ name: "sidebar.brand.mark", priority: -100 }, BrandMark));
       ctx.slots.inject("sidebar.brand.name", () => ctx.slots.register({ name: "sidebar.brand.name", priority: -100 }, BrandName));
+      ctx.slots.inject("conversation.hero.brand.mark", () => ctx.slots.register({ name: "conversation.hero.brand.mark", priority: -100 }, HeroBrandMark));
     }
 
     exports.apply = apply;

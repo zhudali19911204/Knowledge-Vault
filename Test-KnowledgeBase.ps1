@@ -14,6 +14,7 @@ $launcher = Join-Path $productRoot "Start-DeepSeekHarness.ps1"
 $initializer = Join-Path $productRoot "Initialize-KnowledgeBase.ps1"
 $pluginPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\index.js"
 $clientPluginPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\client.js"
+$brandLogoPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\bkcs-logo.png"
 $manifestPath = Join-Path $productRoot "package.json"
 
 foreach ($path in @(
@@ -22,6 +23,7 @@ foreach ($path in @(
     $initializer,
     $pluginPath,
     $clientPluginPath,
+    $brandLogoPath,
     $manifestPath,
     (Join-Path $vaultTemplateRoot "AGENTS.md"),
     (Join-Path $vaultTemplateRoot ".agents\scripts\knowledge_router.py")
@@ -197,11 +199,26 @@ try {
         $clientBundleResponse.Content -notmatch 'ctx.workspaces.pickDirectory' -or
         $clientBundleResponse.Content -notmatch 'postJson\("initialize"' -or
         $clientBundleResponse.Content -notmatch 'postJson\("select"' -or
+        $clientBundleResponse.Content -notmatch 'kv-hero-logo' -or
+        $clientBundleResponse.Content -notmatch 'width: 258' -or
+        $clientBundleResponse.Content -notmatch 'hiddenSiblings.forEach' -or
+        $clientBundleResponse.Content -notmatch '/knowledge-vault/assets/bkcs-logo.png' -or
         $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-initializer"'
     ) {
         throw "The Knowledge Vault right-panel client bundle is not available."
+    }
+    $brandLogoResponse = Invoke-WebRequest `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/assets/bkcs-logo.png" -f $port) `
+        -UseBasicParsing `
+        -TimeoutSec 5
+    if (
+        $brandLogoResponse.StatusCode -ne 200 -or
+        [string]$brandLogoResponse.Headers["Content-Type"] -notmatch '^image/png' -or
+        $brandLogoResponse.RawContentLength -ne (Get-Item -LiteralPath $brandLogoPath).Length
+    ) {
+        throw "The size-matched BKCS hero logo is not available from the Web UI."
     }
 
     $patchPath = Join-Path $runtimeRoot "generated\knowledge-vault.patch.yml"
@@ -353,6 +370,7 @@ try {
     Write-Host "  Web UI           : HTTP $($webResponse.StatusCode)"
     Write-Host "  Workspace        : $($workspace.title)"
     Write-Host "  Vault browser    : $($rootEntries.Count) root entries"
+    Write-Host "  BKCS hero logo   : 258 x 82 CSS pixels"
     Write-Host "  Bundled skills   : $($expectedSkills.Count)"
 }
 finally {
