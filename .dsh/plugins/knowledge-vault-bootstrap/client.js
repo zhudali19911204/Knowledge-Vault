@@ -14,7 +14,7 @@ window.__ModuleLoader__.load({
       @media(max-width:1200px){:root{--kv-browser-width:320px}}
       .kv-brand-mark{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;background:linear-gradient(145deg,#315b4c,#79a789);color:#fff;font-size:14px;font-weight:700;box-shadow:0 4px 14px #315b4c33}
       .kv-brand-name{font-size:15px;font-weight:650;letter-spacing:.02em;color:var(--dsw-alias-label-primary);white-space:nowrap}
-      .kv-init-launcher{box-sizing:border-box;flex:none;margin:0 2px 8px;min-width:0}
+      .kv-init-launcher{box-sizing:border-box;flex:none;margin:0 2px 8px;min-width:0;display:flex;flex-direction:column;gap:8px}
       .kv-init-button{box-sizing:border-box;width:100%;height:38px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-button-elevated-fill);color:var(--dsw-alias-label-primary);display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 12px;cursor:pointer;font:500 14px/22px var(--dsw-font-family);white-space:nowrap;overflow:hidden}
       .kv-init-button:hover{background:var(--dsw-alias-button-floating-hover)}
       .kv-init-button:disabled{cursor:wait;opacity:.65}
@@ -240,31 +240,46 @@ window.__ModuleLoader__.load({
           const launcher = document.createElement("div");
           launcher.className = "kv-init-launcher";
 
-          const button = document.createElement("button");
-          button.type = "button";
-          button.className = "kv-init-button";
-          button.title = "在指定位置初始化并切换到自己的知识库";
-          button.setAttribute("aria-label", "初始化知识库");
-
-          const icon = document.createElement("span");
-          icon.className = "kv-init-icon";
-          icon.setAttribute("aria-hidden", "true");
-          icon.textContent = "⊕";
-          const label = document.createElement("span");
-          label.className = "kv-init-label";
-          label.textContent = "初始化知识库";
+          const createButton = (text, title, iconText) => {
+            const action = document.createElement("button");
+            action.type = "button";
+            action.className = "kv-init-button";
+            action.title = title;
+            action.setAttribute("aria-label", text);
+            const icon = document.createElement("span");
+            icon.className = "kv-init-icon";
+            icon.setAttribute("aria-hidden", "true");
+            icon.textContent = iconText;
+            const label = document.createElement("span");
+            label.className = "kv-init-label";
+            label.textContent = text;
+            action.append(icon, label);
+            return { action, label, title };
+          };
+          const initializeButton = createButton(
+            "初始化知识库",
+            "在指定位置初始化并切换到自己的知识库",
+            "⊕",
+          );
+          const selectButton = createButton(
+            "选择知识库",
+            "选择一个已经初始化的 Knowledge Vault",
+            "◉",
+          );
           const status = document.createElement("div");
           status.className = "kv-init-status";
           status.setAttribute("role", "status");
           status.setAttribute("aria-live", "polite");
-          button.append(icon, label);
-          launcher.append(button, status);
+          launcher.append(initializeButton.action, selectButton.action, status);
 
-          const setState = (text, detail = "", busy = false) => {
-            label.textContent = text;
+          const setState = (kind, text, detail = "", busy = false) => {
+            initializeButton.label.textContent = kind === "initialize" ? text : "初始化知识库";
+            selectButton.label.textContent = kind === "select" ? text : "选择知识库";
             status.textContent = detail;
-            button.title = detail || "在指定位置初始化并切换到自己的知识库";
-            button.disabled = busy;
+            initializeButton.action.title = kind === "initialize" && detail ? detail : initializeButton.title;
+            selectButton.action.title = kind === "select" && detail ? detail : selectButton.title;
+            initializeButton.action.disabled = busy;
+            selectButton.action.disabled = busy;
           };
 
           const attach = () => {
@@ -278,13 +293,13 @@ window.__ModuleLoader__.load({
           const initialize = async () => {
             window.clearTimeout(resetTimer);
             try {
-              setState("选择知识库位置…", "请选择空文件夹或已有的 Knowledge Vault。", true);
+              setState("initialize", "选择知识库位置…", "请选择空文件夹或已有的 Knowledge Vault。", true);
               const destination = await ctx.workspaces.pickDirectory();
               if (destination === null || disposed) {
-                setState("初始化知识库");
+                setState("initialize", "初始化知识库");
                 return;
               }
-              setState("正在初始化…", destination, true);
+              setState("initialize", "正在初始化…", destination, true);
               const result = await postJson("initialize", { destination });
               const workspace = await ctx.workspaces.create({ path: result.vaultRoot });
               if (disposed) return;
@@ -293,20 +308,50 @@ window.__ModuleLoader__.load({
               }));
               ctx.workspaces.startSession(workspace.workspaceId);
               setState(
+                "initialize",
                 result.alreadyInitialized ? "已切换知识库" : "初始化完成",
                 result.vaultRoot,
               );
               resetTimer = window.setTimeout(() => {
-                if (!disposed) setState("初始化知识库");
+                if (!disposed) setState("initialize", "初始化知识库");
               }, 5000);
             } catch (cause) {
               if (disposed) return;
               const message = cause instanceof Error ? cause.message : String(cause);
-              setState("初始化失败", message);
+              setState("initialize", "初始化失败", message);
             }
           };
 
-          button.addEventListener("click", initialize);
+          const select = async () => {
+            window.clearTimeout(resetTimer);
+            try {
+              setState("select", "选择知识库位置…", "请选择已有的 Knowledge Vault 根目录。", true);
+              const destination = await ctx.workspaces.pickDirectory();
+              if (destination === null || disposed) {
+                setState("select", "选择知识库");
+                return;
+              }
+              setState("select", "正在切换…", destination, true);
+              const result = await postJson("select", { destination });
+              const workspace = await ctx.workspaces.create({ path: result.vaultRoot });
+              if (disposed) return;
+              window.dispatchEvent(new CustomEvent("knowledge-vault:changed", {
+                detail: { vaultRoot: result.vaultRoot },
+              }));
+              ctx.workspaces.startSession(workspace.workspaceId);
+              setState("select", "切换完成", result.vaultRoot);
+              resetTimer = window.setTimeout(() => {
+                if (!disposed) setState("select", "选择知识库");
+              }, 5000);
+            } catch (cause) {
+              if (disposed) return;
+              const message = cause instanceof Error ? cause.message : String(cause);
+              setState("select", "选择失败", message);
+            }
+          };
+
+          initializeButton.action.addEventListener("click", initialize);
+          selectButton.action.addEventListener("click", select);
           const observer = new MutationObserver(attach);
           observer.observe(document.body, { childList: true, subtree: true });
           attach();
@@ -314,7 +359,8 @@ window.__ModuleLoader__.load({
             disposed = true;
             window.clearTimeout(resetTimer);
             observer.disconnect();
-            button.removeEventListener("click", initialize);
+            initializeButton.action.removeEventListener("click", initialize);
+            selectButton.action.removeEventListener("click", select);
             launcher.remove();
           };
         }, []);

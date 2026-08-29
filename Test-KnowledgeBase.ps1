@@ -196,6 +196,7 @@ try {
         $clientBundleResponse.Content -notmatch 'kv-init-launcher' -or
         $clientBundleResponse.Content -notmatch 'ctx.workspaces.pickDirectory' -or
         $clientBundleResponse.Content -notmatch 'postJson\("initialize"' -or
+        $clientBundleResponse.Content -notmatch 'postJson\("select"' -or
         $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-initializer"'
@@ -243,6 +244,21 @@ try {
     if (-not $nonEmptyRejected -or -not (Test-Path -LiteralPath (Join-Path $nonEmptyVault "keep.txt") -PathType Leaf)) {
         throw "The in-app initializer did not safely reject a normal non-empty directory."
     }
+    $uninitializedSelectionRejected = $false
+    try {
+        Invoke-RestMethod `
+            -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/select" -f $port) `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body (@{ destination = $nonEmptyVault } | ConvertTo-Json) `
+            -TimeoutSec 5 | Out-Null
+    }
+    catch {
+        $uninitializedSelectionRejected = $_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::Conflict
+    }
+    if (-not $uninitializedSelectionRejected) {
+        throw "The in-app selector accepted a directory that is not an initialized Knowledge Vault."
+    }
 
     $uiInitialization = Invoke-RestMethod `
         -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/initialize" -f $port) `
@@ -276,7 +292,28 @@ try {
     if ($null -eq $uiWorkspace) {
         throw "The in-app initialized Vault was not registered as a Harness workspace."
     }
-    $workspace = $uiWorkspace
+
+    Write-Host "Selecting the original Vault through the in-app API..."
+    $vaultSelection = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/select" -f $port) `
+        -Method Post `
+        -ContentType "application/json" `
+        -Body (@{ destination = $initializedVault } | ConvertTo-Json) `
+        -TimeoutSec 10
+    if (-not [string]::Equals([string]$vaultSelection.vaultRoot, $initializedVault, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The in-app selector returned the wrong Vault path."
+    }
+    $selectedProductConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $runtimeRoot "product.json") | ConvertFrom-Json
+    if (-not [string]::Equals([string]$selectedProductConfig.vaultRoot, $initializedVault, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The in-app selector did not persist the selected Vault path."
+    }
+    $selectedVaultTree = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/list?path=" -f $port) `
+        -Method Get `
+        -TimeoutSec 5
+    if (-not [string]::Equals([string]$selectedVaultTree.rootName, "vault", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The right-panel browser did not switch to the selected Vault."
+    }
 
     $sessionResponse = Invoke-DshRpc `
         -Method "session.create" `
@@ -312,6 +349,7 @@ try {
     Write-Host "  DeepSeek Harness : $actualDshVersion"
     Write-Host "  One-click init   : $initializedVault"
     Write-Host "  In-app init      : $uiInitializedVault"
+    Write-Host "  In-app select    : $initializedVault"
     Write-Host "  Web UI           : HTTP $($webResponse.StatusCode)"
     Write-Host "  Workspace        : $($workspace.title)"
     Write-Host "  Vault browser    : $($rootEntries.Count) root entries"

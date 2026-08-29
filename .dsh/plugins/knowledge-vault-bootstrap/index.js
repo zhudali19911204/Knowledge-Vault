@@ -191,6 +191,43 @@ async function initializeVault(destination) {
   return { vaultRoot, alreadyInitialized };
 }
 
+async function selectVault(destination) {
+  if (typeof destination !== "string" || destination.trim() === "" || destination.includes("\0")) {
+    throw Object.assign(new Error("请选择一个有效的知识库目录。"), { statusCode: 400 });
+  }
+  if (!isAbsolute(destination)) {
+    throw Object.assign(new Error("知识库目录必须使用绝对路径。"), { statusCode: 400 });
+  }
+
+  const { productRoot, productConfig } = await resolveInitializationPaths();
+  const vaultRoot = await realpath(destination).catch((error) => {
+    if (error?.code === "ENOENT") {
+      throw Object.assign(new Error("所选知识库目录不存在。"), { statusCode: 404 });
+    }
+    throw error;
+  });
+  if (!(await stat(vaultRoot)).isDirectory()) {
+    throw Object.assign(new Error("请选择 Knowledge Vault 根目录。"), { statusCode: 400 });
+  }
+
+  const dataRoot = dirname(productConfig);
+  if (pathsOverlap(vaultRoot, productRoot)) {
+    throw Object.assign(new Error("请选择应用程序目录以外的知识库。"), { statusCode: 400 });
+  }
+  if (pathsOverlap(vaultRoot, dataRoot)) {
+    throw Object.assign(new Error("知识库目录不能与 Harness 用户数据目录重叠。"), { statusCode: 400 });
+  }
+  if (!(await isInitializedVault(vaultRoot))) {
+    throw Object.assign(
+      new Error("所选目录不是已初始化的 Knowledge Vault。请先使用“初始化知识库”。"),
+      { statusCode: 409 },
+    );
+  }
+
+  await persistSelectedVault(productConfig, vaultRoot);
+  return { vaultRoot };
+}
+
 async function readJsonBody(req) {
   let body = "";
   for await (const chunk of req) {
@@ -217,7 +254,7 @@ function assertSameOrigin(req) {
     throw Object.assign(new Error("无效的请求来源。"), { statusCode: 403 });
   }
   if (originHost.toLowerCase() !== host.toLowerCase()) {
-    throw Object.assign(new Error("不允许从其他页面初始化本机知识库。"), { statusCode: 403 });
+    throw Object.assign(new Error("不允许从其他页面更改本机知识库。"), { statusCode: 403 });
   }
 }
 
@@ -351,6 +388,41 @@ function createInitializationHandler(ctx, state) {
   };
 }
 
+function createSelectionHandler(ctx, state) {
+  return async (req, res) => {
+    if (req.method !== "POST") {
+      sendJson(res, 405, { error: "Method not allowed." });
+      return;
+    }
+
+    try {
+      assertSameOrigin(req);
+      const body = await readJsonBody(req);
+      const result = await selectVault(body.destination);
+      let workspace = await ctx.workspaceRegistry.resolveByPath(result.vaultRoot);
+      if (workspace === undefined) {
+        workspace = await ctx.workspaceRegistry.create(result.vaultRoot);
+      }
+      const title = basename(result.vaultRoot);
+      if (title && workspace.title !== title) {
+        await workspace.setTitle(title);
+      }
+      state.vaultRoot = result.vaultRoot;
+      ctx.logger.info(`selected knowledge workspace: ${result.vaultRoot}`);
+      sendJson(res, 200, {
+        ...result,
+        workspaceId: workspace.id,
+      });
+    } catch (error) {
+      const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+      ctx.logger.warn(`knowledge Vault selection failed: ${error?.stack || error}`);
+      sendJson(res, statusCode, {
+        error: statusCode === 500 ? "选择知识库失败，请查看启动窗口中的错误信息。" : error.message,
+      });
+    }
+  };
+}
+
 async function apply(ctx) {
   const state = { vaultRoot: await resolveVaultRoot() };
 
@@ -391,12 +463,18 @@ async function apply(ctx) {
       path: `${API_PREFIX}/initialize`,
       handler: createInitializationHandler(ctx, state),
     });
+    const disposeSelect = ctx.webServer.register({
+      kind: "exact",
+      path: `${API_PREFIX}/select`,
+      handler: createSelectionHandler(ctx, state),
+    });
     return () => {
+      disposeSelect();
       disposeInitialize();
       disposeFile();
       disposeList();
     };
-  }, "knowledge-vault-bootstrap: Vault browser and initializer API");
+  }, "knowledge-vault-bootstrap: Vault browser, initializer, and selector API");
 }
 
 export { apply, inject, name };
