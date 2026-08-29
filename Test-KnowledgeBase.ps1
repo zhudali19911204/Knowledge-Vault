@@ -63,6 +63,72 @@ if ($LASTEXITCODE -ne 0) {
     throw "Knowledge Vault client plugin syntax validation failed with exit code $LASTEXITCODE."
 }
 
+$graphSimulationSmoke = @'
+const fs = require("node:fs");
+const vm = require("node:vm");
+const clientPath = process.argv[2];
+let source = fs.readFileSync(clientPath, "utf8");
+const marker = "    exports.apply = apply;";
+if (!source.includes(marker)) throw new Error("Unable to expose graph simulation helpers.");
+source = source.replace(marker, `
+    exports.__graphTest = {
+      createGraphSimulation,
+      reheatGraphSimulation,
+      tickGraphSimulation,
+    };
+${marker}`);
+let plugin;
+const React = { createElement() {} };
+const sandbox = {
+  window: {
+    __ModuleLoader__: {
+      load(definition) {
+        plugin = definition.factory((name) => name === "react" ? React : {});
+      },
+    },
+  },
+};
+vm.runInNewContext(source, sandbox, { filename: clientPath });
+const helpers = plugin?.__graphTest;
+if (!helpers) throw new Error("Graph simulation helpers were not loaded.");
+const nodes = [
+  { id: "A.md", path: "A.md", title: "A", topFolder: "02_Domains", degree: 1, isIndex: false },
+  { id: "B.md", path: "B.md", title: "B", topFolder: "02_Domains", degree: 2, isIndex: false },
+  { id: "C.md", path: "C.md", title: "C", topFolder: "03_Areas", degree: 1, isIndex: false },
+];
+const edges = [
+  { source: "A.md", target: "B.md", kind: "wikilink" },
+  { source: "B.md", target: "C.md", kind: "related" },
+];
+const simulation = helpers.createGraphSimulation(nodes, edges);
+const before = Array.from(simulation.positions.values(), ({ x, y }) => ({ x, y }));
+for (let index = 0; index < 90; index += 1) helpers.tickGraphSimulation(simulation);
+const after = Array.from(simulation.positions.values());
+if (!after.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))) {
+  throw new Error("Dynamic graph produced a non-finite position.");
+}
+if (!after.some((point, index) => Math.hypot(point.x - before[index].x, point.y - before[index].y) > .1)) {
+  throw new Error("Dynamic graph nodes did not move.");
+}
+if (!(simulation.alpha < 1)) throw new Error("Dynamic graph did not cool down.");
+const dragged = simulation.positions.get("A.md");
+dragged.fx = 40;
+dragged.fy = -25;
+helpers.reheatGraphSimulation(simulation, .5);
+helpers.tickGraphSimulation(simulation);
+if (dragged.x !== 40 || dragged.y !== -25) throw new Error("Dragged node was not fixed.");
+dragged.fx = null;
+dragged.fy = null;
+helpers.reheatGraphSimulation(simulation, .6);
+for (let index = 0; index < 12; index += 1) helpers.tickGraphSimulation(simulation);
+if (dragged.x === 40 && dragged.y === -25) throw new Error("Released node did not rejoin the layout.");
+console.log("Dynamic graph simulation smoke passed.");
+'@
+$graphSimulationSmoke | & node - $clientPluginPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Dynamic graph simulation validation failed with exit code $LASTEXITCODE."
+}
+
 $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
 $expectedDshVersion = [string]$manifest.dependencies.'@deepseek-ai/dsh'
 $actualDshVersion = (& $localDshCommand --version 2>&1 | Out-String).Trim()
@@ -225,12 +291,18 @@ try {
         $clientBundleResponse.Content -notmatch 'document title and favicon' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-graph"' -or
         $clientBundleResponse.Content -notmatch 'function KnowledgeGraphView\(\)' -or
+        $clientBundleResponse.Content -notmatch 'function createGraphSimulation\(' -or
+        $clientBundleResponse.Content -notmatch 'function tickGraphSimulation\(' -or
+        $clientBundleResponse.Content -notmatch 'requestAnimationFrame' -or
+        $clientBundleResponse.Content -notmatch 'mode: "node"' -or
+        $clientBundleResponse.Content -notmatch 'hoveredNeighbors' -or
+        $clientBundleResponse.Content -notmatch 'simulationPaused' -or
         $clientBundleResponse.Content -notmatch 'knowledge-vault:open-file' -or
         $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-initializer"'
     ) {
-        throw "The Knowledge Vault right-panel client bundle is not available."
+        throw "The Knowledge Vault interactive client bundle is not available."
     }
     $brandLogoResponse = Invoke-WebRequest `
         -Uri ("http://127.0.0.1:{0}/knowledge-vault/assets/bkcs-logo.png" -f $port) `

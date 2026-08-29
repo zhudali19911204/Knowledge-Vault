@@ -306,7 +306,7 @@ window.__ModuleLoader__.load({
       return Array.from(values).sort((left, right) => left.localeCompare(right, "zh-CN"));
     }
 
-    function createGraphLayout(nodes) {
+    function createInitialGraphLayout(nodes) {
       const groups = new Map();
       for (const node of nodes) {
         const key = node.topFolder || "/";
@@ -341,11 +341,197 @@ window.__ModuleLoader__.load({
       return positions;
     }
 
+    function graphLinkPhysics(kind) {
+      if (kind === "parent_index") return { distance: 72, strength: .045 };
+      if (kind === "related") return { distance: 88, strength: .036 };
+      if (kind === "wikilink" || kind === "markdown") return { distance: 104, strength: .028 };
+      return { distance: 120, strength: .022 };
+    }
+
+    function createGraphSimulation(nodes, edges, previousPositions) {
+      const initial = createInitialGraphLayout(nodes);
+      const positions = new Map();
+      const rows = nodes.map((node, index) => {
+        const fallback = initial.get(node.id) || { x: 0, y: 0 };
+        const previous = previousPositions?.get(node.id);
+        const point = {
+          id: node.id,
+          group: node.topFolder || "/",
+          radius: (node.isIndex ? 5 : 3.4) + Math.min(5.5, Math.sqrt(node.degree || 0) * .95),
+          x: Number.isFinite(previous?.x) ? previous.x : fallback.x,
+          y: Number.isFinite(previous?.y) ? previous.y : fallback.y,
+          vx: 0,
+          vy: 0,
+          fx: null,
+          fy: null,
+          index,
+        };
+        positions.set(node.id, point);
+        return point;
+      });
+
+      const groupTotals = new Map();
+      for (const row of rows) {
+        const fallback = initial.get(row.id) || row;
+        const total = groupTotals.get(row.group) || { x: 0, y: 0, count: 0 };
+        total.x += fallback.x;
+        total.y += fallback.y;
+        total.count += 1;
+        groupTotals.set(row.group, total);
+      }
+      const groupCenters = new Map(Array.from(groupTotals, ([key, value]) => [key, {
+        x: value.x / value.count,
+        y: value.y / value.count,
+      }]));
+
+      const linkPairs = new Map();
+      for (const edge of edges) {
+        const source = positions.get(edge.source);
+        const target = positions.get(edge.target);
+        if (!source || !target) continue;
+        const pairKey = source.id < target.id
+          ? `${source.id}\0${target.id}`
+          : `${target.id}\0${source.id}`;
+        const physics = graphLinkPhysics(edge.kind);
+        const existing = linkPairs.get(pairKey);
+        if (existing) {
+          existing.distance = Math.min(existing.distance, physics.distance);
+          existing.strength = Math.min(.075, existing.strength + physics.strength * .45);
+        } else {
+          linkPairs.set(pairKey, { source, target, ...physics });
+        }
+      }
+
+      return {
+        positions,
+        nodes: rows,
+        links: Array.from(linkPairs.values()),
+        groupCenters,
+        alpha: 1,
+        ticks: 0,
+      };
+    }
+
+    function reheatGraphSimulation(simulation, alpha = .55) {
+      if (!simulation) return;
+      simulation.alpha = Math.max(simulation.alpha, alpha);
+      simulation.ticks = 0;
+    }
+
+    function tickGraphSimulation(simulation) {
+      const alpha = simulation.alpha;
+      const rows = simulation.nodes;
+      if (rows.length === 0) return false;
+
+      for (const link of simulation.links) {
+        let dx = link.target.x - link.source.x;
+        let dy = link.target.y - link.source.y;
+        let distance = Math.hypot(dx, dy);
+        if (distance < .01) {
+          dx = ((link.source.index * 17 + link.target.index * 29) % 7) - 3;
+          dy = ((link.source.index * 31 + link.target.index * 13) % 7) - 3;
+          distance = Math.max(.1, Math.hypot(dx, dy));
+        }
+        const force = ((distance - link.distance) / distance) * link.strength * alpha;
+        const forceX = dx * force;
+        const forceY = dy * force;
+        if (link.source.fx === null) {
+          link.source.vx += forceX;
+          link.source.vy += forceY;
+        }
+        if (link.target.fx === null) {
+          link.target.vx -= forceX;
+          link.target.vy -= forceY;
+        }
+      }
+
+      const cellSize = 82;
+      const grid = new Map();
+      for (const row of rows) {
+        const cellX = Math.floor(row.x / cellSize);
+        const cellY = Math.floor(row.y / cellSize);
+        const key = `${cellX},${cellY}`;
+        const cell = grid.get(key) || [];
+        cell.push(row);
+        grid.set(key, cell);
+      }
+      for (const row of rows) {
+        const cellX = Math.floor(row.x / cellSize);
+        const cellY = Math.floor(row.y / cellSize);
+        for (let offsetX = -1; offsetX <= 1; offsetX += 1) {
+          for (let offsetY = -1; offsetY <= 1; offsetY += 1) {
+            const neighbors = grid.get(`${cellX + offsetX},${cellY + offsetY}`) || [];
+            for (const other of neighbors) {
+              if (other.index <= row.index) continue;
+              let dx = other.x - row.x;
+              let dy = other.y - row.y;
+              let distanceSquared = dx * dx + dy * dy;
+              if (distanceSquared < .01) {
+                dx = ((row.index * 19 + other.index * 23) % 5) - 2;
+                dy = ((row.index * 11 + other.index * 37) % 5) - 2;
+                distanceSquared = Math.max(.1, dx * dx + dy * dy);
+              }
+              const distance = Math.sqrt(distanceSquared);
+              const collisionDistance = row.radius + other.radius + 9;
+              const repulsion = Math.min(1.25, 150 / distanceSquared) * alpha;
+              const collision = distance < collisionDistance
+                ? (collisionDistance - distance) * .075
+                : 0;
+              const force = repulsion + collision;
+              const forceX = (dx / distance) * force;
+              const forceY = (dy / distance) * force;
+              if (row.fx === null) {
+                row.vx -= forceX;
+                row.vy -= forceY;
+              }
+              if (other.fx === null) {
+                other.vx += forceX;
+                other.vy += forceY;
+              }
+            }
+          }
+        }
+      }
+
+      let kinetic = 0;
+      for (const row of rows) {
+        const groupCenter = simulation.groupCenters.get(row.group) || { x: 0, y: 0 };
+        if (row.fx !== null && row.fy !== null) {
+          row.x = row.fx;
+          row.y = row.fy;
+          row.vx = 0;
+          row.vy = 0;
+          continue;
+        }
+        row.vx += (groupCenter.x - row.x) * .00055 * alpha;
+        row.vy += (groupCenter.y - row.y) * .00055 * alpha;
+        row.vx += -row.x * .00012 * alpha;
+        row.vy += -row.y * .00012 * alpha;
+        row.vx *= .84;
+        row.vy *= .84;
+        const speed = Math.hypot(row.vx, row.vy);
+        if (speed > 11) {
+          row.vx = (row.vx / speed) * 11;
+          row.vy = (row.vy / speed) * 11;
+        }
+        row.x += row.vx;
+        row.y += row.vy;
+        kinetic += row.vx * row.vx + row.vy * row.vy;
+      }
+
+      simulation.ticks += 1;
+      simulation.alpha = Math.max(0, alpha * .985 - .00065);
+      const averageKinetic = kinetic / Math.max(1, rows.length);
+      return simulation.ticks < 720 && (simulation.alpha > .012 || averageKinetic > .012);
+    }
+
     function KnowledgeGraphView() {
       const canvasRef = React.useRef(null);
       const stageRef = React.useRef(null);
       const dragRef = React.useRef(null);
       const refreshRef = React.useRef(false);
+      const simulationRef = React.useRef(null);
+      const animationFrameRef = React.useRef(0);
       const [graph, setGraph] = React.useState(null);
       const [loading, setLoading] = React.useState(true);
       const [error, setError] = React.useState("");
@@ -361,6 +547,10 @@ window.__ModuleLoader__.load({
       const [selectedId, setSelectedId] = React.useState("");
       const [hovered, setHovered] = React.useState(null);
       const [dragging, setDragging] = React.useState(false);
+      const [simulationPaused, setSimulationPaused] = React.useState(false);
+      const [simulationActive, setSimulationActive] = React.useState(false);
+      const [simulationPulse, setSimulationPulse] = React.useState(0);
+      const [frameRevision, setFrameRevision] = React.useState(0);
       const [size, setSize] = React.useState({ width: 0, height: 0 });
       const [transform, setTransform] = React.useState({ x: 0, y: 0, scale: 1 });
 
@@ -455,12 +645,58 @@ window.__ModuleLoader__.load({
         };
       }, [graph, query, folder, type, status, tag, relation, showOrphans, localOnly, selectedId]);
 
-      const layout = React.useMemo(() => createGraphLayout(visible.nodes), [visible.nodes]);
+      const simulation = React.useMemo(() => {
+        const next = createGraphSimulation(
+          visible.nodes,
+          visible.edges,
+          simulationRef.current?.positions,
+        );
+        simulationRef.current = next;
+        return next;
+      }, [visible]);
+      const layout = simulation.positions;
       const nodeById = React.useMemo(
         () => new Map(visible.nodes.map((node) => [node.id, node])),
         [visible.nodes],
       );
+      const hoveredNeighbors = React.useMemo(() => {
+        const neighbors = new Set();
+        if (!hovered?.id) return neighbors;
+        for (const edge of visible.edges) {
+          if (edge.source === hovered.id) neighbors.add(edge.target);
+          if (edge.target === hovered.id) neighbors.add(edge.source);
+        }
+        return neighbors;
+      }, [visible.edges, hovered?.id]);
       const selected = graph?.nodes?.find((node) => node.id === selectedId) || null;
+
+      React.useEffect(() => {
+        window.cancelAnimationFrame(animationFrameRef.current);
+        if (simulationPaused || simulation.nodes.length === 0) {
+          setSimulationActive(false);
+          return undefined;
+        }
+        let lastFrame = 0;
+        setSimulationActive(true);
+        const animate = (timestamp) => {
+          if (timestamp - lastFrame >= 15) {
+            lastFrame = timestamp;
+            const active = tickGraphSimulation(simulation);
+            setFrameRevision((value) => value + 1);
+            if (!active) {
+              setSimulationActive(false);
+              animationFrameRef.current = 0;
+              return;
+            }
+          }
+          animationFrameRef.current = window.requestAnimationFrame(animate);
+        };
+        animationFrameRef.current = window.requestAnimationFrame(animate);
+        return () => {
+          window.cancelAnimationFrame(animationFrameRef.current);
+          animationFrameRef.current = 0;
+        };
+      }, [simulation, simulationPaused, simulationPulse]);
 
       const fitGraph = React.useCallback(() => {
         if (!size.width || !size.height || layout.size === 0) return;
@@ -499,12 +735,16 @@ window.__ModuleLoader__.load({
         const dark = document.documentElement.classList.contains("dark") ||
           document.documentElement.dataset.theme === "dark" ||
           window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-        context.strokeStyle = dark ? "rgba(210,220,235,.20)" : "rgba(55,68,85,.18)";
         context.lineWidth = Math.max(.45, .9 / transform.scale);
         for (const edge of visible.edges) {
           const source = layout.get(edge.source);
           const target = layout.get(edge.target);
           if (!source || !target) continue;
+          const connected = !hovered?.id || edge.source === hovered.id || edge.target === hovered.id;
+          context.globalAlpha = connected ? 1 : .09;
+          context.strokeStyle = hovered?.id && connected
+            ? (dark ? "rgba(118,174,255,.72)" : "rgba(49,111,210,.62)")
+            : (dark ? "rgba(210,220,235,.20)" : "rgba(55,68,85,.18)");
           context.beginPath();
           context.moveTo(source.x, source.y);
           context.lineTo(target.x, target.y);
@@ -516,6 +756,9 @@ window.__ModuleLoader__.load({
           if (!point) continue;
           const active = node.id === selectedId;
           const hot = node.id === hovered?.id;
+          const neighbor = hoveredNeighbors.has(node.id);
+          const emphasized = !hovered?.id || hot || neighbor || active;
+          context.globalAlpha = emphasized ? 1 : .16;
           const radius = (node.isIndex ? 5 : 3.4) + Math.min(5.5, Math.sqrt(node.degree || 0) * .95) + (active ? 2 : 0);
           context.beginPath();
           context.arc(point.x, point.y, radius, 0, Math.PI * 2);
@@ -526,7 +769,7 @@ window.__ModuleLoader__.load({
             context.strokeStyle = active ? "rgba(255,122,22,.35)" : "rgba(77,141,247,.35)";
             context.stroke();
           }
-          if (visible.nodes.length <= 100 || active || hot) {
+          if ((visible.nodes.length <= 100 && emphasized) || active || hot) {
             const fontSize = Math.max(9, Math.min(13, 11 / Math.max(.75, transform.scale)));
             context.font = `${active ? 600 : 400} ${fontSize}px sans-serif`;
             context.fillStyle = dark ? "rgba(238,242,248,.88)" : "rgba(45,54,66,.80)";
@@ -534,7 +777,8 @@ window.__ModuleLoader__.load({
             context.fillText(node.title, point.x + radius + 4, point.y, 220);
           }
         }
-      }, [visible, layout, size, transform, selectedId, hovered]);
+        context.globalAlpha = 1;
+      }, [visible, layout, size, transform, selectedId, hovered, hoveredNeighbors, frameRevision]);
 
       const graphPoint = (event) => {
         const rect = canvasRef.current.getBoundingClientRect();
@@ -570,9 +814,35 @@ window.__ModuleLoader__.load({
         }));
       };
 
+      const wakeSimulation = (alpha = .45) => {
+        reheatGraphSimulation(simulation, alpha);
+        setSimulationActive(true);
+        if (!simulationPaused) setSimulationPulse((value) => value + 1);
+      };
+
       const pointerDown = (event) => {
         canvasRef.current.setPointerCapture?.(event.pointerId);
+        const hit = hitNode(event);
+        if (hit.node) {
+          const position = layout.get(hit.node.id);
+          position.fx = position.x;
+          position.fy = position.y;
+          dragRef.current = {
+            mode: "node",
+            nodeId: hit.node.id,
+            pointerId: event.pointerId,
+            x: event.clientX,
+            y: event.clientY,
+            offsetX: position.x - hit.point.x,
+            offsetY: position.y - hit.point.y,
+            moved: false,
+          };
+          setHovered({ id: hit.node.id, x: hit.point.screenX, y: hit.point.screenY });
+          wakeSimulation(.35);
+          return;
+        }
         dragRef.current = {
+          mode: "pan",
           pointerId: event.pointerId,
           x: event.clientX,
           y: event.clientY,
@@ -588,10 +858,22 @@ window.__ModuleLoader__.load({
           const dx = event.clientX - drag.x;
           const dy = event.clientY - drag.y;
           if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-          if (drag.moved) {
+          if (drag.mode === "node") {
+            const point = graphPoint(event);
+            const position = layout.get(drag.nodeId);
+            if (position) {
+              position.fx = point.x + drag.offsetX;
+              position.fy = point.y + drag.offsetY;
+              position.x = position.fx;
+              position.y = position.fy;
+              setHovered({ id: drag.nodeId, x: point.screenX, y: point.screenY });
+              setFrameRevision((value) => value + 1);
+            }
+          } else if (drag.moved) {
             setDragging(true);
             setTransform((value) => ({ ...value, x: drag.originX + dx, y: drag.originY + dy }));
           }
+          if (drag.moved) setDragging(true);
           return;
         }
         const hit = hitNode(event);
@@ -601,7 +883,17 @@ window.__ModuleLoader__.load({
       const pointerUp = (event) => {
         const drag = dragRef.current;
         if (!drag || drag.pointerId !== event.pointerId) return;
-        if (!drag.moved) selectNode(hitNode(event).node);
+        if (drag.mode === "node") {
+          const node = nodeById.get(drag.nodeId);
+          const position = layout.get(drag.nodeId);
+          if (position) {
+            position.fx = null;
+            position.fy = null;
+          }
+          if (!drag.moved && event.type !== "pointercancel") selectNode(node);
+          wakeSimulation(drag.moved ? .5 : .28);
+        }
+        canvasRef.current.releasePointerCapture?.(event.pointerId);
         dragRef.current = null;
         setDragging(false);
       };
@@ -624,6 +916,15 @@ window.__ModuleLoader__.load({
         refreshRef.current = true;
         setRevision((value) => value + 1);
       };
+      const toggleSimulation = () => {
+        if (simulationPaused) {
+          reheatGraphSimulation(simulation, .42);
+          setSimulationPaused(false);
+          setSimulationPulse((value) => value + 1);
+        } else {
+          setSimulationPaused(true);
+        }
+      };
       const renderOptions = (values, emptyLabel) => [
         e("option", { key: "", value: "" }, emptyLabel),
         ...values.map((value) => e("option", { key: value, value }, value)),
@@ -637,8 +938,9 @@ window.__ModuleLoader__.load({
       });
 
       const hoveredNode = hovered ? nodeById.get(hovered.id) : null;
+      const motionState = simulationPaused ? "已暂停" : simulationActive ? "布局中" : "已稳定";
       const summary = graph
-        ? `${visible.nodes.length}/${graph.nodeCount} 个节点 · ${visible.edges.length}/${graph.edgeCount} 条关系 · ${graph.unresolvedCount} 个未解析`
+        ? `${visible.nodes.length}/${graph.nodeCount} 个节点 · ${visible.edges.length}/${graph.edgeCount} 条关系 · ${graph.unresolvedCount} 个未解析 · ${motionState}`
         : "";
 
       return e("section", { className: "kv-graph", "aria-label": "知识关联图谱" },
@@ -675,6 +977,13 @@ window.__ModuleLoader__.load({
               onClick: () => setLocalOnly((value) => !value),
               title: selectedId ? "只显示所选笔记两跳以内的关系" : "请先选择一个节点",
             }, "局部 2 跳"),
+            e("button", {
+              type: "button",
+              className: "kv-graph-action",
+              "data-active": simulationPaused ? "true" : "false",
+              onClick: toggleSimulation,
+              title: simulationPaused ? "继续动态布局" : "暂停动态布局",
+            }, simulationPaused ? "继续运动" : "暂停运动"),
             e("button", { type: "button", className: "kv-graph-action", onClick: fitGraph }, "适应画布"),
             e("button", { type: "button", className: "kv-graph-action", onClick: refresh, disabled: loading }, loading ? "刷新中…" : "刷新"),
           ),
@@ -714,7 +1023,7 @@ window.__ModuleLoader__.load({
                 e("span", { title: selected.path }, `${selected.path} · 入 ${selected.inDegree} / 出 ${selected.outDegree}`),
                 e("button", { type: "button", className: "kv-graph-action", onClick: () => selectNode(selected) }, "右侧预览"),
               )
-              : e("span", null, "单击节点可选择并在右侧预览；拖拽平移，滚轮缩放。"),
+              : e("span", null, "拖动节点可调整关系布局；拖动空白处平移，滚轮缩放。"),
           ),
           e("div", { className: "kv-graph-legend", "aria-label": "图例" },
             e("span", null, e("i", { className: "kv-graph-dot", style: { background: "#4d8df7" } }), "目录节点"),
