@@ -56,9 +56,10 @@ Knowledge Base Template/
 4. 点击左侧“新会话”下方的“初始化知识库”，在系统文件夹选择器中指定一个空目录。Harness 会复制模板、记住该位置、切换工作区并直接打开新会话。
 5. 需要使用另一个已有知识库时，点击“选择知识库”并选择其 Vault 根目录；右侧工作栏会立即切换目录，并预览 Markdown、文本和代码文件。
 6. 在会话顶部切换到“图谱”，浏览当前 Vault 的显式知识关系；单击节点会在右侧工作栏只读预览对应笔记。
-7. 在 Harness 的“设置 → 模型”中配置自己的 API 密钥。密钥只保存在当前 Windows 用户的数据目录中，不要写入 Vault。
-8. 用 Obsidian 选择“打开本地仓库”，打开第 4 步选择的目录，并从 `知识库首页.md` 进入。
-9. 将第一份资料放入 Inbox，或在 AI 对话中使用 `知识收 精简` / `知识收 保真`。
+7. 切换到“统计”，从笔记规模、目录/类型/状态分布、知识健康提醒和最近更新了解当前 Vault；单击问题文件或最近文件会在右侧工作栏只读预览。
+8. 在 Harness 的“设置 → 模型”中配置自己的 API 密钥。密钥只保存在当前 Windows 用户的数据目录中，不要写入 Vault。
+9. 用 Obsidian 选择“打开本地仓库”，打开第 4 步选择的目录，并从 `知识库首页.md` 进入。
+10. 将第一份资料放入 Inbox，或在 AI 对话中使用 `知识收 精简` / `知识收 保真`。
 
 界面内初始化只接受空目录或已经初始化的 Knowledge Vault，不会覆盖普通非空目录；“选择知识库”只接受包含 `AGENTS.md` 和 `01_Inbox/` 的已初始化 Vault，不会向其中复制或修改知识内容。`Initialize-KnowledgeBase.cmd` 继续保留为无法打开 Web UI 时的备用入口。应用程序仍留在解压目录，知识正文位于用户选择的位置；用户配置只记录在 `%LOCALAPPDATA%\KnowledgeVaultHarness\product.json`。
 
@@ -73,6 +74,12 @@ Obsidian 的模板目录、附件目录和新建笔记目录已经配置好。`.
 图谱支持标题/路径搜索、一级目录、知识类型、状态、标签和关系类型筛选，可隐藏孤立节点，或在选中节点后查看两跳局部图。节点通过链接弹簧、局部排斥和目录弱聚类进行动态布局并自然稳定；拖动节点可调整关系布局，悬停节点会聚焦其直接邻居，拖动空白处可平移，滚轮可缩放，也可暂停或继续运动。点击“刷新”会重新读取磁盘上的 Markdown。未解析链接只计入状态统计，便于后续修正，不会虚构目标节点。
 
 “图谱设置”可调整节点斥力、链接距离、目录聚类、中心引力、节点大小、连线粗细和标签数量；参数保存在当前浏览器，可恢复默认或重置节点位置。可见节点达到 700 个时，布局自动交给 Web Worker 后台计算；超过 3000 个时默认暂停运动并限制标签数量，提示先通过目录、类型或“两跳局部图”缩小范围，用户仍可手动继续。Worker 无法启动时会自动回退到主线程，不影响只读浏览和筛选。
+
+### 知识统计（第一版）
+
+“统计”页签在本机只读扫描当前 Vault，不调用模型也不会修改知识内容。总览显示 Markdown 笔记、可检索知识、Inbox 待处理、附件、显式关系和知识库体积；内容分布按一级目录、`type`、`status` 和热门标签展示。
+
+健康提醒包含 Inbox 待处理、`needs-review`、未解析的笔记链接、02–05 主目录中的孤立知识、`knowledge-skill` 必要元数据缺失以及到期复习。点击有问题的文件或最近更新文件，会在右侧知识库浏览器中打开只读预览。“刷新”会重新读取磁盘；初始化或选择其他 Vault 时会同时清空图谱和统计缓存。统计默认忽略 `.git`、`.dsh`、`.agents`、`.obsidian`、`.pnpm-store` 和 `node_modules` 等运行目录。
 
 ## 四个 AI 指令
 
@@ -96,7 +103,7 @@ Obsidian 的模板目录、附件目录和新建笔记目录已经配置好。`.
 
 - `vault-template/AGENTS.md` 是初始化后 Vault 的工作区级强约束，定义目录、路由、检索与安全规则。
 - `vault-template/.dsh/skills/` 提供 `vault-retrieve`、`knowledge-capture`、`knowledge-organize`、`knowledge-link` 和 `knowledge-audit` 五个按需技能。
-- `.dsh/plugins/knowledge-vault-bootstrap/` 在每次启动时注册用户选定的 Vault，并提供界面内初始化、知识库选择、只读目录/文件接口、右侧知识库浏览器和 Canvas 知识图谱；`graph-worker.js` 负责大图谱的后台物理布局。
+- `.dsh/plugins/knowledge-vault-bootstrap/` 在每次启动时注册用户选定的 Vault，并提供界面内初始化、知识库选择、只读目录/文件接口、右侧知识库浏览器、Canvas 知识图谱和知识统计页；`graph-worker.js` 负责大图谱的后台物理布局。
 - `.dsh/plugins/knowledge-vault-bootstrap/assets/bkcs-logo.png` 是欢迎页使用的 BKCS Logo；按 258×82 CSS 像素等比显示，不替换左侧 Knowledge Vault 品牌。
 - `.dsh/plugins/knowledge-vault-bootstrap/assets/knowledge-vault-favicon.png` 是由灰橙 Z Logo 制作的透明图标，用于浏览器 favicon 和左侧栏 24×24 品牌标记；页面加载后标签标题固定为 `Knowledge Vault`。
 - 初始化后的 `05_Skills/` 仍是 Obsidian 内的可复用知识；`.dsh/skills/` 是 Agent 运行时说明，两者不混用。
@@ -133,7 +140,7 @@ Windows 快速启动：
 ./Test-KnowledgeBase.cmd
 ```
 
-自检会先验证主线程动态图谱行为，并对 25、500、2000 个节点执行 Worker 布局基准；随后通过脚本初始化临时 Vault，再通过界面 API 初始化第二个 Vault并在两者之间切换，验证固定 DSH 版本、Web UI、工作区自动注册、右侧文件浏览接口、显式关系图谱、图谱缓存切换、Worker 静态资源、新建会话和 5 个项目技能。不调用模型，也不需要 API 密钥，结束后自动关闭服务并清理临时数据。
+自检会先验证主线程动态图谱行为，并对 25、500、2000 个节点执行 Worker 布局基准；随后通过脚本初始化临时 Vault，再通过界面 API 初始化第二个 Vault并在两者之间切换，验证固定 DSH 版本、Web UI、工作区自动注册、右侧文件浏览接口、显式关系图谱、知识统计与缓存切换、Worker 静态资源、新建会话和 5 个项目技能。不调用模型，也不需要 API 密钥，结束后自动关闭服务并清理临时数据。
 
 依赖构建脚本采用 pnpm 11 的逐包白名单，仅放行当前锁文件中 DSH 所需的 5 个包；没有启用全局的 `dangerouslyAllowAllBuilds`。升级 DSH 时应同步更新 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 并重跑集成测试。
 

@@ -286,6 +286,20 @@ try {
         "---`ntitle: Graph B`ntype: knowledge-card`nstatus: active`ntags:`n  - graph-test`nparent_index: `"[[Graph A]]`"`n---`n# Graph B`n",
         [System.Text.UTF8Encoding]::new($false)
     )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $graphFixtureRoot "Stats Knowledge.md"),
+        "---`ntitle: Stats Knowledge`ntype: knowledge-skill`nstatus: processed`ndescription: Statistics fixture`nuse_when: [statistics]`ndo_not_use_when: [unrelated]`nsource_notes: [`"[[Graph A]]`"]`ntags: [stats-test]`n---`n# Stats Knowledge`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $initializedVault "01_Inbox\Stats Pending.md"),
+        "---`ntitle: Stats Pending`ntype: source`nstatus: needs-review`ntags: [stats-test]`n---`n# Stats Pending`n[[Missing Stats Target]]`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllBytes(
+        (Join-Path $initializedVault "07_Attachments\stats-attachment.bin"),
+        [byte[]](1, 2, 3, 4)
+    )
 
     Write-Host "Starting an isolated DeepSeek Harness release test on port $port..."
     $launcherArguments = @(
@@ -363,6 +377,10 @@ try {
         $clientBundleResponse.Content -notmatch 'width: 24' -or
         $clientBundleResponse.Content -notmatch 'document title and favicon' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-graph"' -or
+        $clientBundleResponse.Content -notmatch 'id: "knowledge-stats"' -or
+        $clientBundleResponse.Content -notmatch 'function KnowledgeStatsView\(\)' -or
+        $clientBundleResponse.Content -notmatch 'kv-stat-cards' -or
+        $clientBundleResponse.Content -notmatch '/stats' -or
         $clientBundleResponse.Content -notmatch 'function KnowledgeGraphView\(\)' -or
         $clientBundleResponse.Content -notmatch 'function createGraphSimulation\(' -or
         $clientBundleResponse.Content -notmatch 'function tickGraphSimulation\(' -or
@@ -459,6 +477,29 @@ try {
     ) {
         throw "The read-only knowledge graph API did not parse nodes, metadata, and explicit Markdown relationships."
     }
+    $knowledgeStats = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/stats?refresh=1" -f $port) `
+        -Method Get `
+        -TimeoutSec 20
+    $statsFolderKeys = @($knowledgeStats.distributions.folders | ForEach-Object { [string]$_.key })
+    $statsNeedsReview = @($knowledgeStats.health | Where-Object { $_.id -eq "needs-review" }) | Select-Object -First 1
+    $statsUnresolved = @($knowledgeStats.health | Where-Object { $_.id -eq "unresolved-links" }) | Select-Object -First 1
+    $statsRecentPaths = @($knowledgeStats.recent | ForEach-Object { [string]$_.path })
+    if (
+        $knowledgeStats.rootName -ne "vault" -or
+        [int]$knowledgeStats.overview.markdownNotes -lt 4 -or
+        [int]$knowledgeStats.overview.knowledgeCards -lt 1 -or
+        [int]$knowledgeStats.overview.inboxPending -lt 1 -or
+        [int]$knowledgeStats.overview.attachmentCount -lt 1 -or
+        [int]$knowledgeStats.overview.explicitRelations -ne [int]$knowledgeGraph.edgeCount -or
+        "01_Inbox" -notin $statsFolderKeys -or
+        "02_Domains" -notin $statsFolderKeys -or
+        [int]$statsNeedsReview.count -lt 1 -or
+        [int]$statsUnresolved.count -lt 1 -or
+        "01_Inbox/Stats Pending.md" -notin $statsRecentPaths
+    ) {
+        throw "The read-only knowledge statistics API did not return the expected overview, distributions, health checks, and recent files."
+    }
 
     Write-Host "Initializing another Vault through the in-app API..."
     New-Item -ItemType Directory -Force -Path $nonEmptyVault | Out-Null
@@ -526,6 +567,13 @@ try {
     if (-not [string]::Equals([string]$uiKnowledgeGraph.rootName, "ui-vault", [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The knowledge graph cache did not switch to the in-app initialized Vault."
     }
+    $uiKnowledgeStats = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/stats" -f $port) `
+        -Method Get `
+        -TimeoutSec 20
+    if (-not [string]::Equals([string]$uiKnowledgeStats.rootName, "ui-vault", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The knowledge statistics cache did not switch to the in-app initialized Vault."
+    }
     $uiWorkspaceResponse = Invoke-DshRpc -Method "workspace.list" -Payload @{} -RpcId "release-ui-workspace"
     $uiWorkspace = @($uiWorkspaceResponse.result.value.items) | Where-Object {
         [string]::Equals([string]$_.path, $uiInitializedVault, [System.StringComparison]::OrdinalIgnoreCase)
@@ -554,6 +602,13 @@ try {
         -TimeoutSec 5
     if (-not [string]::Equals([string]$selectedVaultTree.rootName, "vault", [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The right-panel browser did not switch to the selected Vault."
+    }
+    $selectedKnowledgeStats = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/stats" -f $port) `
+        -Method Get `
+        -TimeoutSec 20
+    if (-not [string]::Equals([string]$selectedKnowledgeStats.rootName, "vault", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The knowledge statistics cache did not switch back to the selected Vault."
     }
 
     $sessionResponse = Invoke-DshRpc `
@@ -595,6 +650,7 @@ try {
     Write-Host "  Workspace        : $($workspace.title)"
     Write-Host "  Vault browser    : $($rootEntries.Count) root entries"
     Write-Host "  Knowledge graph  : $($knowledgeGraph.nodeCount) nodes / $($knowledgeGraph.edgeCount) explicit edges"
+    Write-Host "  Knowledge stats  : $($knowledgeStats.overview.markdownNotes) notes / $($knowledgeStats.overview.inboxPending) Inbox pending"
     Write-Host "  Graph layout     : settings + Web Worker + 25/500/2000 benchmark"
     Write-Host "  BKCS hero logo   : 258 x 82 CSS pixels"
     Write-Host "  Product branding : Knowledge Vault + Z favicon/sidebar mark"

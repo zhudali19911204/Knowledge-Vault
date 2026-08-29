@@ -34,6 +34,7 @@ const MAX_PREVIEW_BYTES = 1024 * 1024;
 const MAX_INITIALIZE_BODY_BYTES = 16 * 1024;
 const MAX_GRAPH_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_GRAPH_FILES = 5000;
+const MAX_STATS_FILES = 20000;
 const GRAPH_CACHE_TTL_MS = 5000;
 const GRAPH_IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -51,6 +52,25 @@ const GRAPH_METADATA_FIELDS = new Set([
   "related",
   "source_notes",
   "parent_index",
+  "created",
+  "updated",
+  "description",
+  "use_when",
+  "do_not_use_when",
+  "maturity",
+  "retrieval_priority",
+  "review_after",
+]);
+const SCALAR_METADATA_FIELDS = new Set([
+  "title",
+  "type",
+  "status",
+  "created",
+  "updated",
+  "description",
+  "maturity",
+  "retrieval_priority",
+  "review_after",
 ]);
 const TEXT_EXTENSIONS = new Set([
   ".md",
@@ -437,7 +457,7 @@ function parseMarkdownDocument(source) {
           continue;
         }
         const values = yamlValues(fieldMatch[2]);
-        metadata[activeField] = activeField === "title" || activeField === "type" || activeField === "status"
+        metadata[activeField] = SCALAR_METADATA_FIELDS.has(activeField)
           ? values[0] || ""
           : values;
         continue;
@@ -519,6 +539,43 @@ async function collectMarkdownFiles(vaultRoot) {
   return files;
 }
 
+async function collectVaultFiles(vaultRoot) {
+  const files = [];
+  async function visit(directory, relativeDirectory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const fullPath = join(directory, entry.name);
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!GRAPH_IGNORED_DIRECTORIES.has(entry.name)) await visit(fullPath, relativePath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const details = await stat(fullPath);
+      files.push({
+        fullPath,
+        path: relativePath,
+        extension: extname(entry.name).toLowerCase(),
+        bytes: details.size,
+        modifiedAt: details.mtime.toISOString(),
+      });
+      if (files.length > MAX_STATS_FILES) {
+        throw Object.assign(new Error(`Vault 中的文件超过 ${MAX_STATS_FILES} 个，第一版统计暂不加载。`), {
+          statusCode: 413,
+        });
+      }
+    }
+  }
+  await visit(vaultRoot, "");
+  return files;
+}
+
+function metadataValuePresent(value) {
+  if (Array.isArray(value)) return value.some((item) => String(item || "").trim() !== "");
+  return String(value || "").trim() !== "";
+}
+
 function graphReferenceResolver(nodes) {
   const exact = new Map();
   const stems = new Map();
@@ -562,6 +619,15 @@ async function buildKnowledgeGraph(vaultRoot) {
     const document = parseMarkdownDocument(await readFile(file.fullPath, "utf8"));
     const segments = file.path.split("/");
     const fallbackTitle = basename(file.path, extname(file.path));
+    const knowledgeMetadataFields = [
+      "title",
+      "type",
+      "status",
+      "description",
+      "use_when",
+      "do_not_use_when",
+      "source_notes",
+    ];
     documents.push({
       ...file,
       document,
@@ -574,6 +640,14 @@ async function buildKnowledgeGraph(vaultRoot) {
         type: document.metadata.type || "",
         status: document.metadata.status || "",
         tags: Array.isArray(document.metadata.tags) ? document.metadata.tags : [],
+        created: document.metadata.created || "",
+        updated: document.metadata.updated || "",
+        maturity: document.metadata.maturity || "",
+        retrievalPriority: document.metadata.retrieval_priority || "",
+        reviewAfter: document.metadata.review_after || "",
+        missingMetadata: document.metadata.type === "knowledge-skill"
+          ? knowledgeMetadataFields.filter((field) => !metadataValuePresent(document.metadata[field]))
+          : [],
         degree: 0,
         inDegree: 0,
         outDegree: 0,
@@ -629,6 +703,168 @@ async function buildKnowledgeGraph(vaultRoot) {
   };
 }
 
+function distribution(values, limit = 20) {
+  const counts = new Map();
+  for (const rawValue of values) {
+    const value = String(rawValue || "").trim() || "未设置";
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return Array.from(counts, ([key, count]) => ({ key, count }))
+    .sort((left, right) => right.count - left.count || left.key.localeCompare(right.key, "zh-CN"))
+    .slice(0, limit);
+}
+
+function topFolder(path) {
+  const separator = path.indexOf("/");
+  return separator === -1 ? "/" : path.slice(0, separator);
+}
+
+function normalizedStatsDate(value, fallback) {
+  const raw = String(value || "").trim();
+  const candidate = raw ? raw.replace(/^(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})/, "$1T$2") : fallback;
+  const timestamp = Date.parse(candidate || "");
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : fallback;
+}
+
+function statsItem(node, detail = "") {
+  return {
+    path: node.path,
+    title: node.title || basename(node.path, extname(node.path)),
+    detail,
+  };
+}
+
+async function buildKnowledgeStats(vaultRoot, graph) {
+  const files = await collectVaultFiles(vaultRoot);
+  const markdownFiles = files.filter((file) => file.extension === ".md");
+  const attachments = files.filter((file) => topFolder(file.path) === "07_Attachments");
+  const nodes = graph.nodes || [];
+  const nodeByPath = new Map(nodes.map((node) => [node.path, node]));
+  const knowledgeCards = nodes.filter((node) =>
+    node.type === "knowledge-skill" && ["ready", "processed", "evergreen"].includes(node.status));
+  const inboxPending = nodes.filter((node) =>
+    node.topFolder === "01_Inbox" && !node.isIndex && ["", "inbox", "needs-review"].includes(node.status));
+  const needsReview = nodes.filter((node) => node.status === "needs-review");
+  const orphanCandidates = nodes.filter((node) =>
+    ["02_Domains", "03_Areas", "04_Resources", "05_Skills"].includes(node.topFolder) &&
+    !node.isIndex &&
+    node.degree === 0);
+  const missingMetadata = nodes.filter((node) => node.missingMetadata?.length > 0);
+  const now = Date.now();
+  const overdueReview = nodes.filter((node) => {
+    if (!node.reviewAfter || node.status === "archived") return false;
+    const reviewAt = Date.parse(String(node.reviewAfter).replace(" ", "T"));
+    return Number.isFinite(reviewAt) && reviewAt < now;
+  });
+  const unresolved = (graph.unresolved || []).filter((item) => {
+    const extension = extname(String(item.target || "")).toLowerCase();
+    return extension === "" || extension === ".md";
+  });
+  const unresolvedItems = unresolved.slice(0, 20).map((item) => {
+    const node = nodeByPath.get(item.source) || { path: item.source };
+    return statsItem(node, `未解析目标：${item.target}`);
+  });
+
+  const recent = markdownFiles.map((file) => {
+    const node = nodeByPath.get(file.path);
+    return {
+      path: file.path,
+      title: node?.title || basename(file.path, extname(file.path)),
+      folder: topFolder(file.path),
+      type: node?.type || "",
+      status: node?.status || "",
+      updatedAt: normalizedStatsDate(node?.updated, file.modifiedAt),
+    };
+  }).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 12);
+
+  const latestModifiedAt = files.reduce((latest, file) =>
+    !latest || file.modifiedAt > latest ? file.modifiedAt : latest, "");
+  const folderValues = markdownFiles.map((file) => topFolder(file.path));
+  const tagValues = nodes.flatMap((node) => node.tags || []);
+
+  return {
+    rootName: basename(vaultRoot),
+    generatedAt: new Date().toISOString(),
+    overview: {
+      totalFiles: files.length,
+      totalBytes: files.reduce((sum, file) => sum + file.bytes, 0),
+      markdownNotes: markdownFiles.length,
+      knowledgeCards: knowledgeCards.length,
+      inboxPending: inboxPending.length,
+      attachmentCount: attachments.length,
+      attachmentBytes: attachments.reduce((sum, file) => sum + file.bytes, 0),
+      explicitRelations: graph.edgeCount || 0,
+      lastUpdatedAt: latestModifiedAt || null,
+    },
+    distributions: {
+      folders: distribution(folderValues),
+      types: distribution(nodes.map((node) => node.type)),
+      statuses: distribution(nodes.map((node) => node.status)),
+      tags: distribution(tagValues, 10),
+    },
+    health: [
+      {
+        id: "inbox",
+        label: "Inbox 待处理",
+        count: inboxPending.length,
+        description: "Inbox 中状态为空、inbox 或 needs-review 的笔记。",
+        items: inboxPending.slice(0, 20).map((node) => statsItem(node, node.status || "未设置状态")),
+      },
+      {
+        id: "needs-review",
+        label: "需要复核",
+        count: needsReview.length,
+        description: "status 为 needs-review 的笔记。",
+        items: needsReview.slice(0, 20).map((node) => statsItem(node)),
+      },
+      {
+        id: "unresolved-links",
+        label: "未解析链接",
+        count: unresolved.length,
+        description: "指向当前 Vault 中不存在或无法唯一定位目标的显式链接。",
+        items: unresolvedItems,
+      },
+      {
+        id: "orphans",
+        label: "孤立知识",
+        count: orphanCandidates.length,
+        description: "02–05 主目录中没有任何显式关系的非索引笔记。",
+        items: orphanCandidates.slice(0, 20).map((node) => statsItem(node)),
+      },
+      {
+        id: "metadata",
+        label: "元数据待补全",
+        count: missingMetadata.length,
+        description: "knowledge-skill 缺少必要的检索或来源字段。",
+        items: missingMetadata.slice(0, 20).map((node) => statsItem(node, `缺少：${node.missingMetadata.join("、")}`)),
+      },
+      {
+        id: "review-overdue",
+        label: "复习已到期",
+        count: overdueReview.length,
+        description: "review_after 已早于当前日期且尚未归档的笔记。",
+        items: overdueReview.slice(0, 20).map((node) => statsItem(node, `复习日期：${node.reviewAfter}`)),
+      },
+    ],
+    recent,
+    definitions: {
+      knowledgeCards: "type 为 knowledge-skill，且 status 为 ready、processed 或 evergreen。",
+      attachments: "07_Attachments 目录中的全部文件。",
+      relationships: "Obsidian 双向链接、Markdown 笔记链接及 related、source_notes、parent_index 字段形成的显式关系。",
+    },
+  };
+}
+
+async function resolveCachedGraph(vaultRoot, cache, refresh = false) {
+  const cached = cache.get(vaultRoot);
+  if (!refresh && cached && Date.now() - cached.createdAt <= GRAPH_CACHE_TTL_MS) {
+    return cached.value;
+  }
+  const value = await buildKnowledgeGraph(vaultRoot);
+  cache.set(vaultRoot, { createdAt: Date.now(), value });
+  return value;
+}
+
 function createGraphHandler(resolveActiveVault, cache) {
   return async (req, res) => {
     if (req.method !== "GET" && req.method !== "HEAD") {
@@ -638,13 +874,8 @@ function createGraphHandler(resolveActiveVault, cache) {
     try {
       const url = new URL(req.url || "/", "http://127.0.0.1");
       const vaultRoot = resolveActiveVault();
-      const cached = cache.get(vaultRoot);
       const refresh = url.searchParams.get("refresh") === "1";
-      let value = cached?.value;
-      if (refresh || !cached || Date.now() - cached.createdAt > GRAPH_CACHE_TTL_MS) {
-        value = await buildKnowledgeGraph(vaultRoot);
-        cache.set(vaultRoot, { createdAt: Date.now(), value });
-      }
+      const value = await resolveCachedGraph(vaultRoot, cache, refresh);
       if (req.method === "HEAD") {
         res.statusCode = 200;
         res.end();
@@ -655,6 +886,38 @@ function createGraphHandler(resolveActiveVault, cache) {
       const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
       sendJson(res, statusCode, {
         error: statusCode === 500 ? "无法读取当前知识库图谱。" : error.message,
+      });
+    }
+  };
+}
+
+function createStatsHandler(resolveActiveVault, graphCache, statsCache) {
+  return async (req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      sendJson(res, 405, { error: "Method not allowed." });
+      return;
+    }
+    try {
+      const url = new URL(req.url || "/", "http://127.0.0.1");
+      const vaultRoot = resolveActiveVault();
+      const refresh = url.searchParams.get("refresh") === "1";
+      const cached = statsCache.get(vaultRoot);
+      let value = cached?.value;
+      if (refresh || !cached || Date.now() - cached.createdAt > GRAPH_CACHE_TTL_MS) {
+        const graph = await resolveCachedGraph(vaultRoot, graphCache, refresh);
+        value = await buildKnowledgeStats(vaultRoot, graph);
+        statsCache.set(vaultRoot, { createdAt: Date.now(), value });
+      }
+      if (req.method === "HEAD") {
+        res.statusCode = 200;
+        res.end();
+        return;
+      }
+      sendJson(res, 200, value);
+    } catch (error) {
+      const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+      sendJson(res, statusCode, {
+        error: statusCode === 500 ? "无法统计当前知识库。" : error.message,
       });
     }
   };
@@ -681,6 +944,7 @@ function createInitializationHandler(ctx, state) {
       }
       state.vaultRoot = result.vaultRoot;
       state.graphCache.clear();
+      state.statsCache.clear();
       ctx.logger.info(`initialized and selected knowledge workspace: ${result.vaultRoot}`);
       sendJson(res, 200, {
         ...result,
@@ -717,6 +981,7 @@ function createSelectionHandler(ctx, state) {
       }
       state.vaultRoot = result.vaultRoot;
       state.graphCache.clear();
+      state.statsCache.clear();
       ctx.logger.info(`selected knowledge workspace: ${result.vaultRoot}`);
       sendJson(res, 200, {
         ...result,
@@ -763,7 +1028,11 @@ function createScriptAssetHandler(scriptBytes) {
 }
 
 async function apply(ctx) {
-  const state = { vaultRoot: await resolveVaultRoot(), graphCache: new Map() };
+  const state = {
+    vaultRoot: await resolveVaultRoot(),
+    graphCache: new Map(),
+    statsCache: new Map(),
+  };
   const brandLogo = await readFile(BRAND_LOGO_SOURCE);
   const favicon = await readFile(FAVICON_SOURCE);
   const graphWorker = await readFile(GRAPH_WORKER_SOURCE);
@@ -805,6 +1074,11 @@ async function apply(ctx) {
       path: `${API_PREFIX}/graph`,
       handler: createGraphHandler(() => state.vaultRoot, state.graphCache),
     });
+    const disposeStats = ctx.webServer.register({
+      kind: "exact",
+      path: `${API_PREFIX}/stats`,
+      handler: createStatsHandler(() => state.vaultRoot, state.graphCache, state.statsCache),
+    });
     const disposeInitialize = ctx.webServer.register({
       kind: "exact",
       path: `${API_PREFIX}/initialize`,
@@ -836,11 +1110,12 @@ async function apply(ctx) {
       disposeBrandLogo();
       disposeSelect();
       disposeInitialize();
+      disposeStats();
       disposeGraph();
       disposeFile();
       disposeList();
     };
-  }, "knowledge-vault-bootstrap: Vault browser, initializer, selector, and brand assets");
+  }, "knowledge-vault-bootstrap: Vault browser, graph, statistics, initializer, selector, and brand assets");
 }
 
 export { apply, inject, name };
