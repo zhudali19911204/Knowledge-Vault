@@ -26,6 +26,8 @@ const inject = ["workspaceRegistry", "webServer"];
 const API_PREFIX = "/knowledge-vault/api";
 const BRAND_LOGO_ROUTE = "/knowledge-vault/assets/bkcs-logo.png";
 const BRAND_LOGO_SOURCE = new URL("./assets/bkcs-logo.png", import.meta.url);
+const FAVICON_ROUTE = "/knowledge-vault/assets/knowledge-vault-favicon.png";
+const FAVICON_SOURCE = new URL("./assets/knowledge-vault-favicon.png", import.meta.url);
 const MAX_PREVIEW_BYTES = 1024 * 1024;
 const MAX_INITIALIZE_BODY_BYTES = 16 * 1024;
 const TEXT_EXTENSIONS = new Set([
@@ -443,6 +445,7 @@ function createBrandLogoHandler(logoBytes) {
 async function apply(ctx) {
   const state = { vaultRoot: await resolveVaultRoot() };
   const brandLogo = await readFile(BRAND_LOGO_SOURCE);
+  const favicon = await readFile(FAVICON_SOURCE);
 
   await ctx.effect(async () => {
     let workspace = await ctx.workspaceRegistry.resolveByPath(state.vaultRoot);
@@ -491,14 +494,20 @@ async function apply(ctx) {
       path: BRAND_LOGO_ROUTE,
       handler: createBrandLogoHandler(brandLogo),
     });
+    const disposeFavicon = ctx.webServer.register({
+      kind: "exact",
+      path: FAVICON_ROUTE,
+      handler: createBrandLogoHandler(favicon),
+    });
     return () => {
+      disposeFavicon();
       disposeBrandLogo();
       disposeSelect();
       disposeInitialize();
       disposeFile();
       disposeList();
     };
-  }, "knowledge-vault-bootstrap: Vault browser, initializer, selector, and brand asset");
+  }, "knowledge-vault-bootstrap: Vault browser, initializer, selector, and brand assets");
 }
 
 export { apply, inject, name };

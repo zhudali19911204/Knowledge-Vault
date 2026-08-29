@@ -104,7 +104,8 @@ try {
             "Knowledge-Vault-Harness/vault-template/.dsh/skills/vault-retrieve/SKILL.md",
             "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/index.js",
             "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/client.js",
-            "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/assets/bkcs-logo.png"
+            "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/assets/bkcs-logo.png",
+            "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/assets/knowledge-vault-favicon.png"
         )
         foreach ($requiredEntry in $requiredEntries) {
             if ($requiredEntry -notin $entryNames) {

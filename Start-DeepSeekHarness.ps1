@@ -127,13 +127,15 @@ try {
         }
         Copy-Item -LiteralPath $pluginSource -Destination (Join-Path $runtimePluginRoot $pluginFileName) -Force
     }
-    $brandLogoSource = Join-Path $bootstrapPluginRoot "assets\bkcs-logo.png"
-    if (-not (Test-Path -LiteralPath $brandLogoSource -PathType Leaf)) {
-        throw "Missing BKCS brand logo: $brandLogoSource"
-    }
     $runtimeAssetsRoot = Join-Path $runtimePluginRoot "assets"
     New-Item -ItemType Directory -Force -Path $runtimeAssetsRoot | Out-Null
-    Copy-Item -LiteralPath $brandLogoSource -Destination (Join-Path $runtimeAssetsRoot "bkcs-logo.png") -Force
+    foreach ($assetName in @("bkcs-logo.png", "knowledge-vault-favicon.png")) {
+        $assetSource = Join-Path $bootstrapPluginRoot ("assets\" + $assetName)
+        if (-not (Test-Path -LiteralPath $assetSource -PathType Leaf)) {
+            throw "Missing Knowledge Vault brand asset: $assetSource"
+        }
+        Copy-Item -LiteralPath $assetSource -Destination (Join-Path $runtimeAssetsRoot $assetName) -Force
+    }
 
     $template = Get-Content -Raw -Encoding UTF8 -LiteralPath $patchTemplatePath
     $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)

@@ -9,11 +9,13 @@ window.__ModuleLoader__.load({
     const e = React.createElement;
     const API_PREFIX = "/knowledge-vault/api";
     const BRAND_LOGO_URL = "/knowledge-vault/assets/bkcs-logo.png";
+    const FAVICON_URL = "/knowledge-vault/assets/knowledge-vault-favicon.png";
+    const DOCUMENT_TITLE = "Knowledge Vault";
     const STYLE_ID = "@knowledge-vault/dsh-bootstrap/client.css";
     const css = `
       :root{--kv-browser-width:360px}
       @media(max-width:1200px){:root{--kv-browser-width:320px}}
-      .kv-brand-mark{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;background:linear-gradient(145deg,#315b4c,#79a789);color:#fff;font-size:14px;font-weight:700;box-shadow:0 4px 14px #315b4c33}
+      .kv-brand-mark{width:24px;height:24px;display:block;object-fit:contain}
       .kv-brand-name{font-size:15px;font-weight:650;letter-spacing:.02em;color:var(--dsw-alias-label-primary);white-space:nowrap}
       .kv-hero-logo{display:block;width:min(258px,70vw);height:auto;object-fit:contain;border-radius:5px}
       .kv-init-launcher{box-sizing:border-box;flex:none;margin:0 2px 8px;min-width:0;display:flex;flex-direction:column;gap:8px}
@@ -371,7 +373,14 @@ window.__ModuleLoader__.load({
     }
 
     function BrandMark() {
-      return e("span", { className: "kv-brand-mark", "aria-hidden": true }, "知");
+      return e("img", {
+        className: "kv-brand-mark",
+        src: FAVICON_URL,
+        alt: "",
+        width: 24,
+        height: 24,
+        "aria-hidden": true,
+      });
     }
 
     function BrandName() {
@@ -426,6 +435,51 @@ window.__ModuleLoader__.load({
     const inject = ["slots", "workspaces"];
     function apply(ctx) {
       const InitializationLauncher = createInitializationLauncher(ctx);
+      ctx.effect(() => {
+        if (typeof document === "undefined") return () => {};
+        const originalTitle = document.title;
+        const originalIcons = new Map();
+        const ensureDocumentBrand = () => {
+          if (document.title !== DOCUMENT_TITLE) document.title = DOCUMENT_TITLE;
+          let icons = Array.from(document.head.querySelectorAll('link[rel~="icon"]'));
+          if (icons.length === 0) {
+            const icon = document.createElement("link");
+            icon.rel = "icon";
+            icon.dataset.knowledgeVaultFavicon = "true";
+            document.head.appendChild(icon);
+            icons = [icon];
+          }
+          icons.forEach((icon) => {
+            if (!originalIcons.has(icon) && icon.dataset.knowledgeVaultFavicon !== "true") {
+              originalIcons.set(icon, {
+                href: icon.getAttribute("href"),
+                type: icon.getAttribute("type"),
+              });
+            }
+            if (icon.getAttribute("href") !== FAVICON_URL) icon.setAttribute("href", FAVICON_URL);
+            if (icon.getAttribute("type") !== "image/png") icon.setAttribute("type", "image/png");
+          });
+        };
+        ensureDocumentBrand();
+        const observer = new MutationObserver(ensureDocumentBrand);
+        observer.observe(document.head, {
+          attributes: true,
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+        return () => {
+          observer.disconnect();
+          document.title = originalTitle;
+          document.querySelectorAll('[data-knowledge-vault-favicon="true"]').forEach((icon) => icon.remove());
+          originalIcons.forEach((value, icon) => {
+            if (value.href === null) icon.removeAttribute("href");
+            else icon.setAttribute("href", value.href);
+            if (value.type === null) icon.removeAttribute("type");
+            else icon.setAttribute("type", value.type);
+          });
+        };
+      }, "knowledge-vault-bootstrap: document title and favicon");
       ctx.slots.inject("shell.overlay", () => ctx.slots.register({
         name: "shell.overlay",
         id: "knowledge-vault-browser",

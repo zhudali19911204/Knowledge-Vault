@@ -15,6 +15,7 @@ $initializer = Join-Path $productRoot "Initialize-KnowledgeBase.ps1"
 $pluginPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\index.js"
 $clientPluginPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\client.js"
 $brandLogoPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\bkcs-logo.png"
+$faviconPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\knowledge-vault-favicon.png"
 $manifestPath = Join-Path $productRoot "package.json"
 
 foreach ($path in @(
@@ -24,6 +25,7 @@ foreach ($path in @(
     $pluginPath,
     $clientPluginPath,
     $brandLogoPath,
+    $faviconPath,
     $manifestPath,
     (Join-Path $vaultTemplateRoot "AGENTS.md"),
     (Join-Path $vaultTemplateRoot ".agents\scripts\knowledge_router.py")
@@ -203,6 +205,11 @@ try {
         $clientBundleResponse.Content -notmatch 'width: 258' -or
         $clientBundleResponse.Content -notmatch 'hiddenSiblings.forEach' -or
         $clientBundleResponse.Content -notmatch '/knowledge-vault/assets/bkcs-logo.png' -or
+        $clientBundleResponse.Content -notmatch 'DOCUMENT_TITLE = "Knowledge Vault"' -or
+        $clientBundleResponse.Content -notmatch '/knowledge-vault/assets/knowledge-vault-favicon.png' -or
+        $clientBundleResponse.Content -notmatch 'function BrandMark\(\)' -or
+        $clientBundleResponse.Content -notmatch 'width: 24' -or
+        $clientBundleResponse.Content -notmatch 'document title and favicon' -or
         $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-initializer"'
@@ -219,6 +226,17 @@ try {
         $brandLogoResponse.RawContentLength -ne (Get-Item -LiteralPath $brandLogoPath).Length
     ) {
         throw "The size-matched BKCS hero logo is not available from the Web UI."
+    }
+    $faviconResponse = Invoke-WebRequest `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/assets/knowledge-vault-favicon.png" -f $port) `
+        -UseBasicParsing `
+        -TimeoutSec 5
+    if (
+        $faviconResponse.StatusCode -ne 200 -or
+        [string]$faviconResponse.Headers["Content-Type"] -notmatch '^image/png' -or
+        $faviconResponse.RawContentLength -ne (Get-Item -LiteralPath $faviconPath).Length
+    ) {
+        throw "The Knowledge Vault favicon is not available from the Web UI."
     }
 
     $patchPath = Join-Path $runtimeRoot "generated\knowledge-vault.patch.yml"
@@ -371,6 +389,7 @@ try {
     Write-Host "  Workspace        : $($workspace.title)"
     Write-Host "  Vault browser    : $($rootEntries.Count) root entries"
     Write-Host "  BKCS hero logo   : 258 x 82 CSS pixels"
+    Write-Host "  Product branding : Knowledge Vault + Z favicon/sidebar mark"
     Write-Host "  Bundled skills   : $($expectedSkills.Count)"
 }
 finally {
