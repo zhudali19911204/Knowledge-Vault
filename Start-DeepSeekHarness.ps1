@@ -120,7 +120,7 @@ try {
     # Keep a small runtime copy there so the product plugin resolves by package name.
     $runtimePluginRoot = Join-Path $dshDataRoot "profiles\web\node_modules\@knowledge-vault\dsh-bootstrap"
     New-Item -ItemType Directory -Force -Path $runtimePluginRoot | Out-Null
-    foreach ($pluginFileName in @("package.json", "index.js", "client.js")) {
+    foreach ($pluginFileName in @("package.json", "index.js", "client.js", "graph-worker.js")) {
         $pluginSource = Join-Path $bootstrapPluginRoot $pluginFileName
         if (-not (Test-Path -LiteralPath $pluginSource -PathType Leaf)) {
             throw "Missing Knowledge Vault plugin file: $pluginSource"

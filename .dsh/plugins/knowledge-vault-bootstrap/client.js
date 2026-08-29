@@ -10,6 +10,18 @@ window.__ModuleLoader__.load({
     const API_PREFIX = "/knowledge-vault/api";
     const BRAND_LOGO_URL = "/knowledge-vault/assets/bkcs-logo.png";
     const FAVICON_URL = "/knowledge-vault/assets/knowledge-vault-favicon.png";
+    const GRAPH_WORKER_URL = "/knowledge-vault/assets/graph-worker.js";
+    const GRAPH_WORKER_THRESHOLD = 700;
+    const GRAPH_DYNAMIC_NODE_LIMIT = 3000;
+    const DEFAULT_GRAPH_SETTINGS = Object.freeze({
+      repulsion: 150,
+      linkDistance: 1,
+      clusterStrength: 55,
+      centerStrength: 12,
+      nodeScale: 1,
+      edgeWidth: 1,
+      labelLimit: 100,
+    });
     const DOCUMENT_TITLE = "Knowledge Vault";
     const STYLE_ID = "@knowledge-vault/dsh-bootstrap/client.css";
     const css = `
@@ -74,6 +86,16 @@ window.__ModuleLoader__.load({
       .kv-graph-selection span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .kv-graph-legend{display:flex;align-items:center;gap:10px;white-space:nowrap}
       .kv-graph-dot{display:inline-block;width:8px;height:8px;margin-right:4px;border-radius:50%;vertical-align:-1px}
+      .kv-graph-settings{position:absolute;z-index:4;top:12px;right:12px;width:286px;box-sizing:border-box;padding:12px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2);box-shadow:0 10px 32px #0003;font-size:12px}
+      .kv-graph-settings-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+      .kv-graph-settings-title{font-size:13px;font-weight:650;flex:1}
+      .kv-graph-setting{display:grid;grid-template-columns:76px 1fr 42px;align-items:center;gap:8px;min-height:30px;color:var(--dsw-alias-label-secondary)}
+      .kv-graph-setting input[type="range"]{width:100%;accent-color:#ed7b2f}
+      .kv-graph-setting output{text-align:right;color:var(--dsw-alias-label-tertiary);font-variant-numeric:tabular-nums}
+      .kv-graph-settings-note{margin-top:8px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:16px}
+      .kv-graph-settings-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}
+      .kv-graph-performance{position:absolute;z-index:3;left:50%;top:14px;transform:translateX(-50%);max-width:min(560px,75%);padding:7px 11px;border:1px solid #efbd86;border-radius:8px;background:#fff6e9;color:#944b08;font-size:11px;line-height:16px;text-align:center}
+      @media(prefers-color-scheme:dark){.kv-graph-performance{background:#332619;color:#ffc387;border-color:#7d542b}}
       @media(max-width:900px){.kv-graph-toolbar{padding-inline:10px}.kv-graph-input{width:170px}.kv-graph-summary{display:none}.kv-graph-footer{padding-inline:10px}.kv-graph-legend{display:none}}
     `;
     if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) === null) {
@@ -348,7 +370,7 @@ window.__ModuleLoader__.load({
       return { distance: 120, strength: .022 };
     }
 
-    function createGraphSimulation(nodes, edges, previousPositions) {
+    function createGraphSimulation(nodes, edges, previousPositions, settings = DEFAULT_GRAPH_SETTINGS) {
       const initial = createInitialGraphLayout(nodes);
       const positions = new Map();
       const rows = nodes.map((node, index) => {
@@ -407,6 +429,7 @@ window.__ModuleLoader__.load({
         nodes: rows,
         links: Array.from(linkPairs.values()),
         groupCenters,
+        settings,
         alpha: 1,
         ticks: 0,
       };
@@ -421,6 +444,7 @@ window.__ModuleLoader__.load({
     function tickGraphSimulation(simulation) {
       const alpha = simulation.alpha;
       const rows = simulation.nodes;
+      const settings = simulation.settings || DEFAULT_GRAPH_SETTINGS;
       if (rows.length === 0) return false;
 
       for (const link of simulation.links) {
@@ -432,7 +456,8 @@ window.__ModuleLoader__.load({
           dy = ((link.source.index * 31 + link.target.index * 13) % 7) - 3;
           distance = Math.max(.1, Math.hypot(dx, dy));
         }
-        const force = ((distance - link.distance) / distance) * link.strength * alpha;
+        const desiredDistance = link.distance * settings.linkDistance;
+        const force = ((distance - desiredDistance) / distance) * link.strength * alpha;
         const forceX = dx * force;
         const forceY = dy * force;
         if (link.source.fx === null) {
@@ -445,7 +470,7 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const cellSize = 82;
+      const cellSize = 82 * settings.nodeScale;
       const grid = new Map();
       for (const row of rows) {
         const cellX = Math.floor(row.x / cellSize);
@@ -472,8 +497,8 @@ window.__ModuleLoader__.load({
                 distanceSquared = Math.max(.1, dx * dx + dy * dy);
               }
               const distance = Math.sqrt(distanceSquared);
-              const collisionDistance = row.radius + other.radius + 9;
-              const repulsion = Math.min(1.25, 150 / distanceSquared) * alpha;
+              const collisionDistance = (row.radius + other.radius) * settings.nodeScale + 9;
+              const repulsion = Math.min(1.5, settings.repulsion / distanceSquared) * alpha;
               const collision = distance < collisionDistance
                 ? (collisionDistance - distance) * .075
                 : 0;
@@ -503,10 +528,10 @@ window.__ModuleLoader__.load({
           row.vy = 0;
           continue;
         }
-        row.vx += (groupCenter.x - row.x) * .00055 * alpha;
-        row.vy += (groupCenter.y - row.y) * .00055 * alpha;
-        row.vx += -row.x * .00012 * alpha;
-        row.vy += -row.y * .00012 * alpha;
+        row.vx += (groupCenter.x - row.x) * settings.clusterStrength * .00001 * alpha;
+        row.vy += (groupCenter.y - row.y) * settings.clusterStrength * .00001 * alpha;
+        row.vx += -row.x * settings.centerStrength * .00001 * alpha;
+        row.vy += -row.y * settings.centerStrength * .00001 * alpha;
         row.vx *= .84;
         row.vy *= .84;
         const speed = Math.hypot(row.vx, row.vy);
@@ -532,6 +557,8 @@ window.__ModuleLoader__.load({
       const refreshRef = React.useRef(false);
       const simulationRef = React.useRef(null);
       const animationFrameRef = React.useRef(0);
+      const workerRef = React.useRef(null);
+      const autoPausedLargeGraphRef = React.useRef(false);
       const [graph, setGraph] = React.useState(null);
       const [loading, setLoading] = React.useState(true);
       const [error, setError] = React.useState("");
@@ -551,8 +578,31 @@ window.__ModuleLoader__.load({
       const [simulationActive, setSimulationActive] = React.useState(false);
       const [simulationPulse, setSimulationPulse] = React.useState(0);
       const [frameRevision, setFrameRevision] = React.useState(0);
+      const [layoutRevision, setLayoutRevision] = React.useState(0);
+      const [settingsOpen, setSettingsOpen] = React.useState(false);
+      const [settings, setSettings] = React.useState(() => {
+        try {
+          const saved = JSON.parse(window.localStorage.getItem("knowledge-vault:graph-settings") || "null");
+          return saved ? { ...DEFAULT_GRAPH_SETTINGS, ...saved } : { ...DEFAULT_GRAPH_SETTINGS };
+        } catch {
+          return { ...DEFAULT_GRAPH_SETTINGS };
+        }
+      });
+      const [workerAvailable, setWorkerAvailable] = React.useState(
+        () => typeof Worker === "function",
+      );
+      const [performanceNotice, setPerformanceNotice] = React.useState("");
+      const [workerWarning, setWorkerWarning] = React.useState("");
       const [size, setSize] = React.useState({ width: 0, height: 0 });
       const [transform, setTransform] = React.useState({ x: 0, y: 0, scale: 1 });
+
+      React.useEffect(() => {
+        try {
+          window.localStorage.setItem("knowledge-vault:graph-settings", JSON.stringify(settings));
+        } catch {
+          // Settings remain available for this session if browser storage is unavailable.
+        }
+      }, [settings]);
 
       React.useEffect(() => {
         let alive = true;
@@ -650,15 +700,27 @@ window.__ModuleLoader__.load({
           visible.nodes,
           visible.edges,
           simulationRef.current?.positions,
+          settings,
         );
         simulationRef.current = next;
         return next;
-      }, [visible]);
+      }, [visible, settings, layoutRevision]);
       const layout = simulation.positions;
+      const useWorker = workerAvailable && visible.nodes.length >= GRAPH_WORKER_THRESHOLD;
+      const largeGraph = visible.nodes.length > GRAPH_DYNAMIC_NODE_LIMIT;
       const nodeById = React.useMemo(
         () => new Map(visible.nodes.map((node) => [node.id, node])),
         [visible.nodes],
       );
+      const labeledNodeIds = React.useMemo(() => {
+        const limit = largeGraph
+          ? Math.min(30, settings.labelLimit)
+          : settings.labelLimit;
+        return new Set([...visible.nodes]
+          .sort((left, right) => right.degree - left.degree || Number(right.isIndex) - Number(left.isIndex))
+          .slice(0, limit)
+          .map((node) => node.id));
+      }, [visible.nodes, settings.labelLimit, largeGraph]);
       const hoveredNeighbors = React.useMemo(() => {
         const neighbors = new Set();
         if (!hovered?.id) return neighbors;
@@ -671,8 +733,100 @@ window.__ModuleLoader__.load({
       const selected = graph?.nodes?.find((node) => node.id === selectedId) || null;
 
       React.useEffect(() => {
+        if (largeGraph) {
+          if (!autoPausedLargeGraphRef.current) {
+            autoPausedLargeGraphRef.current = true;
+            setSimulationPaused(true);
+          }
+          setPerformanceNotice(
+            `当前可见 ${visible.nodes.length} 个节点，已默认暂停动态布局。建议先按目录、类型或局部 2 跳筛选；也可手动继续。`,
+          );
+        } else if (useWorker) {
+          if (autoPausedLargeGraphRef.current) {
+            autoPausedLargeGraphRef.current = false;
+            setSimulationPaused(false);
+          }
+          setPerformanceNotice(`已启用后台布局线程（${visible.nodes.length} 个节点），主界面保持可操作。`);
+        } else {
+          if (autoPausedLargeGraphRef.current) {
+            autoPausedLargeGraphRef.current = false;
+            setSimulationPaused(false);
+          }
+          setPerformanceNotice("");
+        }
+      }, [largeGraph, useWorker, visible.nodes.length]);
+
+      React.useEffect(() => {
+        workerRef.current?.terminate();
+        workerRef.current = null;
+        if (!useWorker || simulationPaused || simulation.nodes.length === 0) return undefined;
+
+        let worker;
+        try {
+          worker = new Worker(GRAPH_WORKER_URL, { name: "knowledge-vault-graph-layout" });
+        } catch (cause) {
+          setWorkerWarning("后台布局线程不可用，已自动切换到主线程布局。");
+          setWorkerAvailable(false);
+          return undefined;
+        }
+        workerRef.current = worker;
+        setSimulationActive(true);
+        const nodeIndex = new Map(simulation.nodes.map((node, index) => [node.id, index]));
+        worker.onmessage = (event) => {
+          if (workerRef.current !== worker || event.data?.type !== "frame") return;
+          const positions = new Float32Array(event.data.positions);
+          for (let index = 0; index < simulation.nodes.length; index += 1) {
+            const node = simulation.nodes[index];
+            node.x = positions[index * 2];
+            node.y = positions[index * 2 + 1];
+          }
+          simulation.alpha = event.data.alpha;
+          setSimulationActive(event.data.active === true);
+          setFrameRevision((value) => value + 1);
+        };
+        worker.onerror = () => {
+          if (workerRef.current !== worker) return;
+          worker.terminate();
+          workerRef.current = null;
+          setWorkerWarning("后台布局线程运行失败，已自动切换到主线程布局。");
+          setWorkerAvailable(false);
+        };
+        worker.postMessage({
+          type: "start",
+          nodes: simulation.nodes.map((node) => {
+            const anchor = simulation.groupCenters.get(node.group) || { x: 0, y: 0 };
+            return {
+              id: node.id,
+              group: node.group,
+              radius: node.radius,
+              x: node.x,
+              y: node.y,
+              fx: node.fx,
+              fy: node.fy,
+              anchorX: anchor.x,
+              anchorY: anchor.y,
+            };
+          }),
+          links: simulation.links.map((link) => ({
+            source: nodeIndex.get(link.source.id),
+            target: nodeIndex.get(link.target.id),
+            distance: link.distance,
+            strength: link.strength,
+          })),
+          settings,
+          alpha: simulation.alpha,
+          paused: false,
+          frameInterval: largeGraph ? 50 : 33,
+        });
+        return () => {
+          worker.terminate();
+          if (workerRef.current === worker) workerRef.current = null;
+        };
+      }, [simulation, useWorker, simulationPaused, simulationPulse, settings, largeGraph]);
+
+      React.useEffect(() => {
         window.cancelAnimationFrame(animationFrameRef.current);
-        if (simulationPaused || simulation.nodes.length === 0) {
+        if (useWorker || simulationPaused || simulation.nodes.length === 0) {
           setSimulationActive(false);
           return undefined;
         }
@@ -696,7 +850,12 @@ window.__ModuleLoader__.load({
           window.cancelAnimationFrame(animationFrameRef.current);
           animationFrameRef.current = 0;
         };
-      }, [simulation, simulationPaused, simulationPulse]);
+      }, [simulation, useWorker, simulationPaused, simulationPulse]);
+
+      React.useEffect(() => () => {
+        workerRef.current?.terminate();
+        window.cancelAnimationFrame(animationFrameRef.current);
+      }, []);
 
       const fitGraph = React.useCallback(() => {
         if (!size.width || !size.height || layout.size === 0) return;
@@ -735,7 +894,7 @@ window.__ModuleLoader__.load({
         const dark = document.documentElement.classList.contains("dark") ||
           document.documentElement.dataset.theme === "dark" ||
           window.matchMedia?.("(prefers-color-scheme: dark)").matches;
-        context.lineWidth = Math.max(.45, .9 / transform.scale);
+        context.lineWidth = Math.max(.35, (.9 * settings.edgeWidth) / transform.scale);
         for (const edge of visible.edges) {
           const source = layout.get(edge.source);
           const target = layout.get(edge.target);
@@ -759,7 +918,7 @@ window.__ModuleLoader__.load({
           const neighbor = hoveredNeighbors.has(node.id);
           const emphasized = !hovered?.id || hot || neighbor || active;
           context.globalAlpha = emphasized ? 1 : .16;
-          const radius = (node.isIndex ? 5 : 3.4) + Math.min(5.5, Math.sqrt(node.degree || 0) * .95) + (active ? 2 : 0);
+          const radius = ((node.isIndex ? 5 : 3.4) + Math.min(5.5, Math.sqrt(node.degree || 0) * .95)) * settings.nodeScale + (active ? 2 : 0);
           context.beginPath();
           context.arc(point.x, point.y, radius, 0, Math.PI * 2);
           context.fillStyle = active ? "#ff7a16" : graphColor(node.topFolder);
@@ -769,7 +928,7 @@ window.__ModuleLoader__.load({
             context.strokeStyle = active ? "rgba(255,122,22,.35)" : "rgba(77,141,247,.35)";
             context.stroke();
           }
-          if ((visible.nodes.length <= 100 && emphasized) || active || hot) {
+          if ((labeledNodeIds.has(node.id) && emphasized) || active || hot) {
             const fontSize = Math.max(9, Math.min(13, 11 / Math.max(.75, transform.scale)));
             context.font = `${active ? 600 : 400} ${fontSize}px sans-serif`;
             context.fillStyle = dark ? "rgba(238,242,248,.88)" : "rgba(45,54,66,.80)";
@@ -778,7 +937,7 @@ window.__ModuleLoader__.load({
           }
         }
         context.globalAlpha = 1;
-      }, [visible, layout, size, transform, selectedId, hovered, hoveredNeighbors, frameRevision]);
+      }, [visible, layout, size, transform, selectedId, hovered, hoveredNeighbors, labeledNodeIds, settings, frameRevision]);
 
       const graphPoint = (event) => {
         const rect = canvasRef.current.getBoundingClientRect();
@@ -838,6 +997,14 @@ window.__ModuleLoader__.load({
             moved: false,
           };
           setHovered({ id: hit.node.id, x: hit.point.screenX, y: hit.point.screenY });
+          workerRef.current?.postMessage({
+            type: "drag",
+            index: position.index,
+            fixed: true,
+            x: position.x,
+            y: position.y,
+            alpha: .35,
+          });
           wakeSimulation(.35);
           return;
         }
@@ -866,6 +1033,14 @@ window.__ModuleLoader__.load({
               position.fy = point.y + drag.offsetY;
               position.x = position.fx;
               position.y = position.fy;
+              workerRef.current?.postMessage({
+                type: "drag",
+                index: position.index,
+                fixed: true,
+                x: position.fx,
+                y: position.fy,
+                alpha: .35,
+              });
               setHovered({ id: drag.nodeId, x: point.screenX, y: point.screenY });
               setFrameRevision((value) => value + 1);
             }
@@ -889,6 +1064,12 @@ window.__ModuleLoader__.load({
           if (position) {
             position.fx = null;
             position.fy = null;
+            workerRef.current?.postMessage({
+              type: "drag",
+              index: position.index,
+              fixed: false,
+              alpha: drag.moved ? .5 : .28,
+            });
           }
           if (!drag.moved && event.type !== "pointercancel") selectNode(node);
           wakeSimulation(drag.moved ? .5 : .28);
@@ -916,13 +1097,32 @@ window.__ModuleLoader__.load({
         refreshRef.current = true;
         setRevision((value) => value + 1);
       };
+      const updateSetting = (name, value) => {
+        setSettings((current) => ({ ...current, [name]: Number(value) }));
+      };
+      const resetGraphSettings = () => {
+        setSettings({ ...DEFAULT_GRAPH_SETTINGS });
+      };
+      const resetGraphLayout = () => {
+        simulationRef.current = null;
+        setSelectedId("");
+        setHovered(null);
+        setLayoutRevision((value) => value + 1);
+      };
       const toggleSimulation = () => {
+        autoPausedLargeGraphRef.current = false;
         if (simulationPaused) {
           reheatGraphSimulation(simulation, .42);
           setSimulationPaused(false);
           setSimulationPulse((value) => value + 1);
+          if (largeGraph) {
+            setPerformanceNotice(`当前可见 ${visible.nodes.length} 个节点，已手动继续后台布局；建议优先使用筛选或局部图。`);
+          }
         } else {
           setSimulationPaused(true);
+          if (largeGraph) {
+            setPerformanceNotice(`当前可见 ${visible.nodes.length} 个节点，动态布局已暂停。`);
+          }
         }
       };
       const renderOptions = (values, emptyLabel) => [
@@ -936,9 +1136,27 @@ window.__ModuleLoader__.load({
         "aria-label": label,
         title: label,
       });
+      const settingRow = (label, name, min, max, step, format = (value) => value) => e("label", {
+        className: "kv-graph-setting",
+      },
+        e("span", null, label),
+        e("input", {
+          type: "range",
+          min,
+          max,
+          step,
+          value: settings[name],
+          onChange: (event) => updateSetting(name, event.target.value),
+        }),
+        e("output", null, format(settings[name])),
+      );
 
       const hoveredNode = hovered ? nodeById.get(hovered.id) : null;
-      const motionState = simulationPaused ? "已暂停" : simulationActive ? "布局中" : "已稳定";
+      const motionState = simulationPaused
+        ? "已暂停"
+        : simulationActive
+          ? (useWorker ? "后台布局中" : "布局中")
+          : "已稳定";
       const summary = graph
         ? `${visible.nodes.length}/${graph.nodeCount} 个节点 · ${visible.edges.length}/${graph.edgeCount} 条关系 · ${graph.unresolvedCount} 个未解析 · ${motionState}`
         : "";
@@ -980,6 +1198,13 @@ window.__ModuleLoader__.load({
             e("button", {
               type: "button",
               className: "kv-graph-action",
+              "data-active": settingsOpen ? "true" : "false",
+              onClick: () => setSettingsOpen((value) => !value),
+              title: "调整动态布局和显示参数",
+            }, "图谱设置"),
+            e("button", {
+              type: "button",
+              className: "kv-graph-action",
               "data-active": simulationPaused ? "true" : "false",
               onClick: toggleSimulation,
               title: simulationPaused ? "继续动态布局" : "暂停动态布局",
@@ -989,6 +1214,40 @@ window.__ModuleLoader__.load({
           ),
         ),
         e("div", { ref: stageRef, className: "kv-graph-stage" },
+          (workerWarning || performanceNotice) ? e("div", {
+            className: "kv-graph-performance",
+            role: "status",
+          }, workerWarning || performanceNotice) : null,
+          settingsOpen ? e("section", {
+            className: "kv-graph-settings",
+            "aria-label": "图谱设置",
+          },
+            e("div", { className: "kv-graph-settings-head" },
+              e("div", { className: "kv-graph-settings-title" }, "动态布局与显示"),
+              e("button", {
+                type: "button",
+                className: "kv-icon-button",
+                onClick: () => setSettingsOpen(false),
+                "aria-label": "关闭图谱设置",
+              }, "×"),
+            ),
+            settingRow("节点斥力", "repulsion", 40, 400, 10),
+            settingRow("链接距离", "linkDistance", .6, 1.8, .05, (value) => `${Number(value).toFixed(2)}×`),
+            settingRow("目录聚类", "clusterStrength", 0, 120, 5),
+            settingRow("中心引力", "centerStrength", 0, 50, 2),
+            settingRow("节点大小", "nodeScale", .6, 2, .05, (value) => `${Number(value).toFixed(2)}×`),
+            settingRow("连线粗细", "edgeWidth", .5, 3, .1, (value) => `${Number(value).toFixed(1)}×`),
+            settingRow("标签数量", "labelLimit", 0, 300, 10),
+            e("div", { className: "kv-graph-settings-note" },
+              useWorker
+                ? `当前由 Web Worker 后台计算；${largeGraph ? "大图谱标签自动限制为最多 30 个。" : "界面交互不会被布局计算阻塞。"}`
+                : `少于 ${GRAPH_WORKER_THRESHOLD} 个可见节点时使用主线程动画。设置仅保存在当前浏览器。`,
+            ),
+            e("div", { className: "kv-graph-settings-actions" },
+              e("button", { type: "button", className: "kv-graph-action", onClick: resetGraphSettings }, "恢复默认"),
+              e("button", { type: "button", className: "kv-graph-action", onClick: resetGraphLayout }, "重置位置"),
+            ),
+          ) : null,
           e("canvas", {
             ref: canvasRef,
             className: "kv-graph-canvas",

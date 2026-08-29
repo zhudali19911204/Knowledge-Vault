@@ -2,12 +2,13 @@
   "name": "@knowledge-vault/dsh-bootstrap",
   "version": "1.1.0",
   "private": true,
-  "description": "Binds one Obsidian Vault and provides the Knowledge Vault browser UI.",
+  "description": "Binds one Obsidian Vault and provides the Knowledge Vault browser and interactive graph UI.",
   "type": "module",
   "main": "index.js",
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
+    "./graph-worker": "./graph-worker.js",
     "./package.json": "./package.json"
   },
   "dsh": {

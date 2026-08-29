@@ -14,6 +14,7 @@ $launcher = Join-Path $productRoot "Start-DeepSeekHarness.ps1"
 $initializer = Join-Path $productRoot "Initialize-KnowledgeBase.ps1"
 $pluginPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\index.js"
 $clientPluginPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\client.js"
+$graphWorkerPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\graph-worker.js"
 $brandLogoPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\bkcs-logo.png"
 $faviconPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\knowledge-vault-favicon.png"
 $manifestPath = Join-Path $productRoot "package.json"
@@ -24,6 +25,7 @@ foreach ($path in @(
     $initializer,
     $pluginPath,
     $clientPluginPath,
+    $graphWorkerPath,
     $brandLogoPath,
     $faviconPath,
     $manifestPath,
@@ -61,6 +63,10 @@ if ($LASTEXITCODE -ne 0) {
 & node --check $clientPluginPath
 if ($LASTEXITCODE -ne 0) {
     throw "Knowledge Vault client plugin syntax validation failed with exit code $LASTEXITCODE."
+}
+& node --check $graphWorkerPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge Vault graph worker syntax validation failed with exit code $LASTEXITCODE."
 }
 
 $graphSimulationSmoke = @'
@@ -127,6 +133,73 @@ console.log("Dynamic graph simulation smoke passed.");
 $graphSimulationSmoke | & node - $clientPluginPath
 if ($LASTEXITCODE -ne 0) {
     throw "Dynamic graph simulation validation failed with exit code $LASTEXITCODE."
+}
+
+$graphWorkerBenchmark = @'
+const fs = require("node:fs");
+const vm = require("node:vm");
+const workerPath = process.argv[2];
+const source = fs.readFileSync(workerPath, "utf8");
+const workerSelf = { postMessage() {} };
+vm.runInNewContext(source, {
+  self: workerSelf,
+  setTimeout,
+  clearTimeout,
+  Float32Array,
+  Map,
+  Math,
+  Number,
+}, { filename: workerPath });
+const helpers = workerSelf.__graphWorkerTest;
+if (!helpers) throw new Error("Graph worker test helpers were not loaded.");
+const settings = {
+  repulsion: 150,
+  linkDistance: 1,
+  clusterStrength: 55,
+  centerStrength: 12,
+  nodeScale: 1,
+  edgeWidth: 1,
+  labelLimit: 100,
+};
+function fixture(size) {
+  const nodes = Array.from({ length: size }, (_, index) => {
+    const angle = index * 2.399963229728653;
+    const radius = 30 * Math.sqrt(index);
+    const groupIndex = index % 12;
+    return {
+      id: `N${index}`,
+      group: `G${groupIndex}`,
+      radius: 5,
+      x: Math.cos(angle) * radius,
+      y: Math.sin(angle) * radius,
+      anchorX: Math.cos(groupIndex / 12 * Math.PI * 2) * 350,
+      anchorY: Math.sin(groupIndex / 12 * Math.PI * 2) * 350,
+      fx: null,
+      fy: null,
+    };
+  });
+  const links = [];
+  for (let index = 0; index < size; index += 1) {
+    links.push({ source: index, target: (index + 1) % size, distance: 104, strength: .028 });
+    if (size > 25) links.push({ source: index, target: (index + 17) % size, distance: 88, strength: .036 });
+  }
+  return { nodes, links, settings, alpha: 1, paused: false, frameInterval: 33 };
+}
+for (const [size, ticks] of [[25, 120], [500, 60], [2000, 30]]) {
+  const startedAt = Date.now();
+  const state = helpers.createWorkerState(fixture(size));
+  for (let tick = 0; tick < ticks; tick += 1) helpers.tickWorkerSimulation(state);
+  const elapsed = Date.now() - startedAt;
+  if (!state.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y))) {
+    throw new Error(`Worker benchmark ${size} produced a non-finite position.`);
+  }
+  if (elapsed > 15000) throw new Error(`Worker benchmark ${size} exceeded 15 seconds: ${elapsed} ms.`);
+  console.log(`Graph benchmark ${size}: ${ticks} ticks / ${elapsed} ms`);
+}
+'@
+$graphWorkerBenchmark | & node - $graphWorkerPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Graph worker benchmark validation failed with exit code $LASTEXITCODE."
 }
 
 $manifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
@@ -297,6 +370,11 @@ try {
         $clientBundleResponse.Content -notmatch 'mode: "node"' -or
         $clientBundleResponse.Content -notmatch 'hoveredNeighbors' -or
         $clientBundleResponse.Content -notmatch 'simulationPaused' -or
+        $clientBundleResponse.Content -notmatch 'GRAPH_WORKER_THRESHOLD = 700' -or
+        $clientBundleResponse.Content -notmatch 'GRAPH_DYNAMIC_NODE_LIMIT = 3000' -or
+        $clientBundleResponse.Content -notmatch 'new Worker\(GRAPH_WORKER_URL' -or
+        $clientBundleResponse.Content -notmatch 'kv-graph-settings' -or
+        $clientBundleResponse.Content -notmatch 'knowledge-vault:graph-settings' -or
         $clientBundleResponse.Content -notmatch 'knowledge-vault:open-file' -or
         $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
@@ -325,6 +403,18 @@ try {
         $faviconResponse.RawContentLength -ne (Get-Item -LiteralPath $faviconPath).Length
     ) {
         throw "The Knowledge Vault favicon is not available from the Web UI."
+    }
+    $graphWorkerResponse = Invoke-WebRequest `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/assets/graph-worker.js" -f $port) `
+        -UseBasicParsing `
+        -TimeoutSec 5
+    if (
+        $graphWorkerResponse.StatusCode -ne 200 -or
+        [string]$graphWorkerResponse.Headers["Content-Type"] -notmatch '^text/javascript' -or
+        $graphWorkerResponse.Content -notmatch 'tickWorkerSimulation' -or
+        $graphWorkerResponse.RawContentLength -ne (Get-Item -LiteralPath $graphWorkerPath).Length
+    ) {
+        throw "The Knowledge Vault graph Web Worker is not available from the Web UI."
     }
 
     $patchPath = Join-Path $runtimeRoot "generated\knowledge-vault.patch.yml"
@@ -505,6 +595,7 @@ try {
     Write-Host "  Workspace        : $($workspace.title)"
     Write-Host "  Vault browser    : $($rootEntries.Count) root entries"
     Write-Host "  Knowledge graph  : $($knowledgeGraph.nodeCount) nodes / $($knowledgeGraph.edgeCount) explicit edges"
+    Write-Host "  Graph layout     : settings + Web Worker + 25/500/2000 benchmark"
     Write-Host "  BKCS hero logo   : 258 x 82 CSS pixels"
     Write-Host "  Product branding : Knowledge Vault + Z favicon/sidebar mark"
     Write-Host "  Bundled skills   : $($expectedSkills.Count)"

@@ -28,6 +28,8 @@ const BRAND_LOGO_ROUTE = "/knowledge-vault/assets/bkcs-logo.png";
 const BRAND_LOGO_SOURCE = new URL("./assets/bkcs-logo.png", import.meta.url);
 const FAVICON_ROUTE = "/knowledge-vault/assets/knowledge-vault-favicon.png";
 const FAVICON_SOURCE = new URL("./assets/knowledge-vault-favicon.png", import.meta.url);
+const GRAPH_WORKER_ROUTE = "/knowledge-vault/assets/graph-worker.js";
+const GRAPH_WORKER_SOURCE = new URL("./graph-worker.js", import.meta.url);
 const MAX_PREVIEW_BYTES = 1024 * 1024;
 const MAX_INITIALIZE_BODY_BYTES = 16 * 1024;
 const MAX_GRAPH_FILE_BYTES = 2 * 1024 * 1024;
@@ -745,10 +747,26 @@ function createBrandLogoHandler(logoBytes) {
   };
 }
 
+function createScriptAssetHandler(scriptBytes) {
+  return (req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      sendJson(res, 405, { error: "Method not allowed." });
+      return;
+    }
+    res.statusCode = 200;
+    res.setHeader("content-type", "text/javascript; charset=utf-8");
+    res.setHeader("content-length", String(scriptBytes.length));
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-content-type-options", "nosniff");
+    res.end(req.method === "HEAD" ? undefined : scriptBytes);
+  };
+}
+
 async function apply(ctx) {
   const state = { vaultRoot: await resolveVaultRoot(), graphCache: new Map() };
   const brandLogo = await readFile(BRAND_LOGO_SOURCE);
   const favicon = await readFile(FAVICON_SOURCE);
+  const graphWorker = await readFile(GRAPH_WORKER_SOURCE);
 
   await ctx.effect(async () => {
     let workspace = await ctx.workspaceRegistry.resolveByPath(state.vaultRoot);
@@ -807,7 +825,13 @@ async function apply(ctx) {
       path: FAVICON_ROUTE,
       handler: createBrandLogoHandler(favicon),
     });
+    const disposeGraphWorker = ctx.webServer.register({
+      kind: "exact",
+      path: GRAPH_WORKER_ROUTE,
+      handler: createScriptAssetHandler(graphWorker),
+    });
     return () => {
+      disposeGraphWorker();
       disposeFavicon();
       disposeBrandLogo();
       disposeSelect();
