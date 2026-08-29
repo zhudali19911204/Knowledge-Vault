@@ -135,6 +135,19 @@ try {
         throw "The one-click initializer did not persist the selected Vault path."
     }
 
+    $graphFixtureRoot = Join-Path $initializedVault "02_Domains\0201_GraphTest"
+    New-Item -ItemType Directory -Force -Path $graphFixtureRoot | Out-Null
+    [System.IO.File]::WriteAllText(
+        (Join-Path $graphFixtureRoot "Graph A.md"),
+        "---`ntitle: Graph A`ntype: knowledge-card`nstatus: evergreen`ntags: [graph-test]`nrelated:`n  - `"[[Graph B]]`"`n---`n# Graph A`n[[Graph B]]`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllText(
+        (Join-Path $graphFixtureRoot "Graph B.md"),
+        "---`ntitle: Graph B`ntype: knowledge-card`nstatus: active`ntags:`n  - graph-test`nparent_index: `"[[Graph A]]`"`n---`n# Graph B`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+
     Write-Host "Starting an isolated DeepSeek Harness release test on port $port..."
     $launcherArguments = @(
         "-NoProfile",
@@ -210,6 +223,9 @@ try {
         $clientBundleResponse.Content -notmatch 'function BrandMark\(\)' -or
         $clientBundleResponse.Content -notmatch 'width: 24' -or
         $clientBundleResponse.Content -notmatch 'document title and favicon' -or
+        $clientBundleResponse.Content -notmatch 'id: "knowledge-graph"' -or
+        $clientBundleResponse.Content -notmatch 'function KnowledgeGraphView\(\)' -or
+        $clientBundleResponse.Content -notmatch 'knowledge-vault:open-file' -or
         $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-initializer"'
@@ -259,6 +275,27 @@ try {
         -TimeoutSec 5
     if (-not $filePreview.previewable -or [string]::IsNullOrWhiteSpace([string]$filePreview.content)) {
         throw "The right-panel Vault browser API could not preview AGENTS.md."
+    }
+    $knowledgeGraph = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/graph?refresh=1" -f $port) `
+        -Method Get `
+        -TimeoutSec 15
+    $graphNodes = @($knowledgeGraph.nodes)
+    $graphEdges = @($knowledgeGraph.edges)
+    $graphA = $graphNodes | Where-Object { $_.title -eq "Graph A" } | Select-Object -First 1
+    $graphB = $graphNodes | Where-Object { $_.title -eq "Graph B" } | Select-Object -First 1
+    if ($null -eq $graphA -or $null -eq $graphB) {
+        throw "The read-only knowledge graph API did not return the graph fixture nodes."
+    }
+    $fixtureEdges = @($graphEdges | Where-Object {
+        $_.source -eq $graphA.path -and $_.target -eq $graphB.path -and $_.kind -in @("wikilink", "related")
+    })
+    if (
+        $knowledgeGraph.rootName -ne "vault" -or
+        $fixtureEdges.Count -lt 2 -or
+        $graphA.tags -notcontains "graph-test"
+    ) {
+        throw "The read-only knowledge graph API did not parse nodes, metadata, and explicit Markdown relationships."
     }
 
     Write-Host "Initializing another Vault through the in-app API..."
@@ -319,6 +356,13 @@ try {
         -TimeoutSec 5
     if (-not [string]::Equals([string]$uiVaultTree.rootName, "ui-vault", [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The right-panel browser did not switch to the in-app initialized Vault."
+    }
+    $uiKnowledgeGraph = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/graph" -f $port) `
+        -Method Get `
+        -TimeoutSec 15
+    if (-not [string]::Equals([string]$uiKnowledgeGraph.rootName, "ui-vault", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The knowledge graph cache did not switch to the in-app initialized Vault."
     }
     $uiWorkspaceResponse = Invoke-DshRpc -Method "workspace.list" -Payload @{} -RpcId "release-ui-workspace"
     $uiWorkspace = @($uiWorkspaceResponse.result.value.items) | Where-Object {
@@ -388,6 +432,7 @@ try {
     Write-Host "  Web UI           : HTTP $($webResponse.StatusCode)"
     Write-Host "  Workspace        : $($workspace.title)"
     Write-Host "  Vault browser    : $($rootEntries.Count) root entries"
+    Write-Host "  Knowledge graph  : $($knowledgeGraph.nodeCount) nodes / $($knowledgeGraph.edgeCount) explicit edges"
     Write-Host "  BKCS hero logo   : 258 x 82 CSS pixels"
     Write-Host "  Product branding : Knowledge Vault + Z favicon/sidebar mark"
     Write-Host "  Bundled skills   : $($expectedSkills.Count)"

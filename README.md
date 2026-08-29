@@ -55,15 +55,22 @@ Knowledge Base Template/
 3. 双击 `Start-KnowledgeBase.cmd`。首次启动会先显示模板预览知识库。
 4. 点击左侧“新会话”下方的“初始化知识库”，在系统文件夹选择器中指定一个空目录。Harness 会复制模板、记住该位置、切换工作区并直接打开新会话。
 5. 需要使用另一个已有知识库时，点击“选择知识库”并选择其 Vault 根目录；右侧工作栏会立即切换目录，并预览 Markdown、文本和代码文件。
-6. 在 Harness 的“设置 → 模型”中配置自己的 API 密钥。密钥只保存在当前 Windows 用户的数据目录中，不要写入 Vault。
-7. 用 Obsidian 选择“打开本地仓库”，打开第 4 步选择的目录，并从 `知识库首页.md` 进入。
-8. 将第一份资料放入 Inbox，或在 AI 对话中使用 `知识收 精简` / `知识收 保真`。
+6. 在会话顶部切换到“图谱”，浏览当前 Vault 的显式知识关系；单击节点会在右侧工作栏只读预览对应笔记。
+7. 在 Harness 的“设置 → 模型”中配置自己的 API 密钥。密钥只保存在当前 Windows 用户的数据目录中，不要写入 Vault。
+8. 用 Obsidian 选择“打开本地仓库”，打开第 4 步选择的目录，并从 `知识库首页.md` 进入。
+9. 将第一份资料放入 Inbox，或在 AI 对话中使用 `知识收 精简` / `知识收 保真`。
 
 界面内初始化只接受空目录或已经初始化的 Knowledge Vault，不会覆盖普通非空目录；“选择知识库”只接受包含 `AGENTS.md` 和 `01_Inbox/` 的已初始化 Vault，不会向其中复制或修改知识内容。`Initialize-KnowledgeBase.cmd` 继续保留为无法打开 Web UI 时的备用入口。应用程序仍留在解压目录，知识正文位于用户选择的位置；用户配置只记录在 `%LOCALAPPDATA%\KnowledgeVaultHarness\product.json`。
 
 `Start-KnowledgeBase.cmd` 在尚未安装运行时时也会自动调用安装器。安装需要联网；此后的日常启动使用项目内的固定版本，不会静默升级。尚未初始化时，启动器使用 `vault-template/` 作为预览知识库，不再把应用根目录暴露给目录浏览器。
 
 Obsidian 的模板目录、附件目录和新建笔记目录已经配置好。`.obsidian/workspace*.json` 被忽略，每个使用者会保留自己的界面布局。
+
+### 知识图谱（第一阶段）
+
+“图谱”页签只读扫描当前知识库中的 Markdown 笔记。节点代表笔记，连线只来自可核验的显式关系：Obsidian `[[双向链接]]`、Markdown `.md` 链接，以及 frontmatter 的 `related`、`source_notes`、`parent_index`。第一阶段不会根据关键词或模型推断关系，也不会写回、移动或修改 Vault 文件。
+
+图谱支持标题/路径搜索、一级目录、知识类型、状态、标签和关系类型筛选，可隐藏孤立节点，或在选中节点后查看两跳局部图。拖拽画布可平移、滚轮可缩放；点击“刷新”会重新读取磁盘上的 Markdown。未解析链接只计入状态统计，便于后续修正，不会虚构目标节点。
 
 ## 四个 AI 指令
 
@@ -87,7 +94,7 @@ Obsidian 的模板目录、附件目录和新建笔记目录已经配置好。`.
 
 - `vault-template/AGENTS.md` 是初始化后 Vault 的工作区级强约束，定义目录、路由、检索与安全规则。
 - `vault-template/.dsh/skills/` 提供 `vault-retrieve`、`knowledge-capture`、`knowledge-organize`、`knowledge-link` 和 `knowledge-audit` 五个按需技能。
-- `.dsh/plugins/knowledge-vault-bootstrap/` 在每次启动时注册用户选定的 Vault，并提供界面内初始化、知识库选择、只读目录/文件接口和右侧知识库浏览器。
+- `.dsh/plugins/knowledge-vault-bootstrap/` 在每次启动时注册用户选定的 Vault，并提供界面内初始化、知识库选择、只读目录/文件接口、右侧知识库浏览器和 Canvas 知识图谱。
 - `.dsh/plugins/knowledge-vault-bootstrap/assets/bkcs-logo.png` 是欢迎页使用的 BKCS Logo；按 258×82 CSS 像素等比显示，不替换左侧 Knowledge Vault 品牌。
 - `.dsh/plugins/knowledge-vault-bootstrap/assets/knowledge-vault-favicon.png` 是由灰橙 Z Logo 制作的透明图标，用于浏览器 favicon 和左侧栏 24×24 品牌标记；页面加载后标签标题固定为 `Knowledge Vault`。
 - 初始化后的 `05_Skills/` 仍是 Obsidian 内的可复用知识；`.dsh/skills/` 是 Agent 运行时说明，两者不混用。
@@ -124,7 +131,7 @@ Windows 快速启动：
 ./Test-KnowledgeBase.cmd
 ```
 
-自检会先通过脚本初始化临时 Vault，再通过界面 API 初始化第二个 Vault并在两者之间切换，验证固定 DSH 版本、Web UI、工作区自动注册、右侧文件浏览接口、新建会话和 5 个项目技能；不调用模型，也不需要 API 密钥，结束后自动关闭服务并清理临时数据。
+自检会先通过脚本初始化临时 Vault，再通过界面 API 初始化第二个 Vault并在两者之间切换，验证固定 DSH 版本、Web UI、工作区自动注册、右侧文件浏览接口、显式关系图谱、图谱缓存切换、新建会话和 5 个项目技能；不调用模型，也不需要 API 密钥，结束后自动关闭服务并清理临时数据。
 
 依赖构建脚本采用 pnpm 11 的逐包白名单，仅放行当前锁文件中 DSH 所需的 5 个包；没有启用全局的 `dangerouslyAllowAllBuilds`。升级 DSH 时应同步更新 `package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml` 并重跑集成测试。
 

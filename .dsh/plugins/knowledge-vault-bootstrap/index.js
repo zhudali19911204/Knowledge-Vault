@@ -30,6 +30,26 @@ const FAVICON_ROUTE = "/knowledge-vault/assets/knowledge-vault-favicon.png";
 const FAVICON_SOURCE = new URL("./assets/knowledge-vault-favicon.png", import.meta.url);
 const MAX_PREVIEW_BYTES = 1024 * 1024;
 const MAX_INITIALIZE_BODY_BYTES = 16 * 1024;
+const MAX_GRAPH_FILE_BYTES = 2 * 1024 * 1024;
+const MAX_GRAPH_FILES = 5000;
+const GRAPH_CACHE_TTL_MS = 5000;
+const GRAPH_IGNORED_DIRECTORIES = new Set([
+  ".git",
+  ".dsh",
+  ".agents",
+  ".obsidian",
+  ".pnpm-store",
+  "node_modules",
+]);
+const GRAPH_METADATA_FIELDS = new Set([
+  "title",
+  "type",
+  "status",
+  "tags",
+  "related",
+  "source_notes",
+  "parent_index",
+]);
 const TEXT_EXTENSIONS = new Set([
   ".md",
   ".txt",
@@ -357,6 +377,287 @@ function createApiHandler(resolveActiveVault, operation) {
   };
 }
 
+function graphPath(value) {
+  const parts = String(value || "").replaceAll("\\", "/").split("/");
+  const normalized = [];
+  for (const part of parts) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (normalized.length === 0) return "";
+      normalized.pop();
+    } else {
+      normalized.push(part);
+    }
+  }
+  return normalized.join("/");
+}
+
+function unquoteYaml(value) {
+  const trimmed = String(value || "").trim();
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function yamlValues(value) {
+  const trimmed = String(value || "").trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return trimmed
+      .slice(1, -1)
+      .split(",")
+      .map(unquoteYaml)
+      .filter(Boolean);
+  }
+  return [unquoteYaml(trimmed)].filter(Boolean);
+}
+
+function parseMarkdownDocument(source) {
+  const text = String(source || "").replace(/^\uFEFF/, "");
+  const metadata = {};
+  let body = text;
+  const match = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+  if (match) {
+    body = text.slice(match[0].length);
+    const lines = match[1].split(/\r?\n/);
+    let activeField = "";
+    for (const line of lines) {
+      const fieldMatch = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+      if (fieldMatch) {
+        activeField = fieldMatch[1].toLowerCase();
+        if (!GRAPH_METADATA_FIELDS.has(activeField)) {
+          activeField = "";
+          continue;
+        }
+        const values = yamlValues(fieldMatch[2]);
+        metadata[activeField] = activeField === "title" || activeField === "type" || activeField === "status"
+          ? values[0] || ""
+          : values;
+        continue;
+      }
+      const listMatch = activeField && line.match(/^\s+-\s+(.+)$/);
+      if (listMatch && Array.isArray(metadata[activeField])) {
+        metadata[activeField].push(...yamlValues(listMatch[1]));
+      }
+    }
+  }
+
+  if (!metadata.title) {
+    const heading = body.match(/^#\s+(.+)$/m);
+    if (heading) metadata.title = heading[1].trim();
+  }
+  return { metadata, body };
+}
+
+function cleanGraphReference(value) {
+  let reference = unquoteYaml(value).replace(/^!/, "").trim();
+  const wiki = reference.match(/^\[\[([\s\S]*?)\]\]$/);
+  if (wiki) reference = wiki[1];
+  reference = reference.split("|")[0].split("#")[0].trim();
+  try {
+    reference = decodeURIComponent(reference);
+  } catch {
+    // Keep malformed URI text so it is reported as unresolved instead of failing the graph.
+  }
+  return reference;
+}
+
+function extractGraphReferences(document) {
+  const references = [];
+  const searchable = document.body
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`[^`\r\n]*`/g, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+  const wikiPattern = /(!)?\[\[([^\]\r\n]+)\]\]/g;
+  let match;
+  while ((match = wikiPattern.exec(searchable)) !== null) {
+    references.push({ value: match[2], kind: match[1] ? "embed" : "wikilink" });
+  }
+  const markdownPattern = /\[[^\]\r\n]*\]\(([^)\r\n]+)\)/g;
+  while ((match = markdownPattern.exec(searchable)) !== null) {
+    const value = match[1].trim().replace(/\s+["'][^"']*["']$/, "");
+    if (/\.md(?:#.*)?$/i.test(value)) references.push({ value, kind: "markdown" });
+  }
+  for (const field of ["related", "source_notes", "parent_index"]) {
+    const values = document.metadata[field];
+    for (const value of Array.isArray(values) ? values : values ? [values] : []) {
+      references.push({ value, kind: field });
+    }
+  }
+  return references;
+}
+
+async function collectMarkdownFiles(vaultRoot) {
+  const files = [];
+  async function visit(directory, relativeDirectory) {
+    const entries = await readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const fullPath = join(directory, entry.name);
+      const relativePath = relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) {
+        if (!GRAPH_IGNORED_DIRECTORIES.has(entry.name)) await visit(fullPath, relativePath);
+        continue;
+      }
+      if (!entry.isFile() || extname(entry.name).toLowerCase() !== ".md") continue;
+      files.push({ fullPath, path: relativePath });
+      if (files.length > MAX_GRAPH_FILES) {
+        throw Object.assign(new Error(`Vault 中的 Markdown 文件超过 ${MAX_GRAPH_FILES} 个，第一阶段图谱暂不加载。`), {
+          statusCode: 413,
+        });
+      }
+    }
+  }
+  await visit(vaultRoot, "");
+  return files;
+}
+
+function graphReferenceResolver(nodes) {
+  const exact = new Map();
+  const stems = new Map();
+  for (const node of nodes) {
+    const lowerPath = node.path.toLowerCase();
+    exact.set(lowerPath, node.id);
+    exact.set(lowerPath.replace(/\.md$/i, ""), node.id);
+    const stem = basename(node.path, extname(node.path)).toLowerCase();
+    const matches = stems.get(stem) || [];
+    matches.push(node.id);
+    stems.set(stem, matches);
+  }
+  return (sourcePath, rawReference) => {
+    let reference = cleanGraphReference(rawReference);
+    if (!reference) return undefined;
+    const rootRelative = reference.startsWith("/");
+    reference = reference.replace(/^\/+/, "");
+    const sourceDirectory = sourcePath.includes("/")
+      ? sourcePath.slice(0, sourcePath.lastIndexOf("/"))
+      : "";
+    const candidates = rootRelative
+      ? [graphPath(reference)]
+      : [graphPath(`${sourceDirectory}/${reference}`), graphPath(reference)];
+    for (const candidate of candidates) {
+      const lower = candidate.toLowerCase();
+      const found = exact.get(lower) || exact.get(`${lower}.md`);
+      if (found) return found;
+    }
+    const stem = basename(reference, extname(reference)).toLowerCase();
+    const matches = stems.get(stem);
+    return matches?.length === 1 ? matches[0] : undefined;
+  };
+}
+
+async function buildKnowledgeGraph(vaultRoot) {
+  const files = await collectMarkdownFiles(vaultRoot);
+  const documents = [];
+  for (const file of files) {
+    const details = await stat(file.fullPath);
+    if (details.size > MAX_GRAPH_FILE_BYTES) continue;
+    const document = parseMarkdownDocument(await readFile(file.fullPath, "utf8"));
+    const segments = file.path.split("/");
+    const fallbackTitle = basename(file.path, extname(file.path));
+    documents.push({
+      ...file,
+      document,
+      node: {
+        id: file.path,
+        path: file.path,
+        title: document.metadata.title || fallbackTitle,
+        folder: segments.length > 1 ? segments.slice(0, -1).join("/") : "/",
+        topFolder: segments.length > 1 ? segments[0] : "/",
+        type: document.metadata.type || "",
+        status: document.metadata.status || "",
+        tags: Array.isArray(document.metadata.tags) ? document.metadata.tags : [],
+        degree: 0,
+        inDegree: 0,
+        outDegree: 0,
+        isIndex: /^_?index$/i.test(fallbackTitle) || file.path === "AGENTS.md",
+      },
+    });
+  }
+
+  const nodes = documents.map((item) => item.node);
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
+  const resolveReference = graphReferenceResolver(nodes);
+  const edges = [];
+  const edgeKeys = new Set();
+  const unresolved = [];
+  const unresolvedKeys = new Set();
+  for (const item of documents) {
+    for (const reference of extractGraphReferences(item.document)) {
+      const rawTarget = cleanGraphReference(reference.value);
+      const target = resolveReference(item.path, rawTarget);
+      if (!target) {
+        if (rawTarget) {
+          const key = `${item.path}\0${reference.kind}\0${rawTarget}`;
+          if (!unresolvedKeys.has(key)) {
+            unresolvedKeys.add(key);
+            unresolved.push({ source: item.path, target: rawTarget, kind: reference.kind });
+          }
+        }
+        continue;
+      }
+      if (target === item.path) continue;
+      const key = `${item.path}\0${target}\0${reference.kind}`;
+      if (edgeKeys.has(key)) continue;
+      edgeKeys.add(key);
+      edges.push({ id: `e${edges.length + 1}`, source: item.path, target, kind: reference.kind });
+      const sourceNode = nodeById.get(item.path);
+      const targetNode = nodeById.get(target);
+      sourceNode.outDegree += 1;
+      sourceNode.degree += 1;
+      targetNode.inDegree += 1;
+      targetNode.degree += 1;
+    }
+  }
+
+  return {
+    rootName: basename(vaultRoot),
+    generatedAt: new Date().toISOString(),
+    nodeCount: nodes.length,
+    edgeCount: edges.length,
+    unresolvedCount: unresolved.length,
+    nodes,
+    edges,
+    unresolved,
+  };
+}
+
+function createGraphHandler(resolveActiveVault, cache) {
+  return async (req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      sendJson(res, 405, { error: "Method not allowed." });
+      return;
+    }
+    try {
+      const url = new URL(req.url || "/", "http://127.0.0.1");
+      const vaultRoot = resolveActiveVault();
+      const cached = cache.get(vaultRoot);
+      const refresh = url.searchParams.get("refresh") === "1";
+      let value = cached?.value;
+      if (refresh || !cached || Date.now() - cached.createdAt > GRAPH_CACHE_TTL_MS) {
+        value = await buildKnowledgeGraph(vaultRoot);
+        cache.set(vaultRoot, { createdAt: Date.now(), value });
+      }
+      if (req.method === "HEAD") {
+        res.statusCode = 200;
+        res.end();
+        return;
+      }
+      sendJson(res, 200, value);
+    } catch (error) {
+      const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+      sendJson(res, statusCode, {
+        error: statusCode === 500 ? "无法读取当前知识库图谱。" : error.message,
+      });
+    }
+  };
+}
+
 function createInitializationHandler(ctx, state) {
   return async (req, res) => {
     if (req.method !== "POST") {
@@ -377,6 +678,7 @@ function createInitializationHandler(ctx, state) {
         await workspace.setTitle(title);
       }
       state.vaultRoot = result.vaultRoot;
+      state.graphCache.clear();
       ctx.logger.info(`initialized and selected knowledge workspace: ${result.vaultRoot}`);
       sendJson(res, 200, {
         ...result,
@@ -412,6 +714,7 @@ function createSelectionHandler(ctx, state) {
         await workspace.setTitle(title);
       }
       state.vaultRoot = result.vaultRoot;
+      state.graphCache.clear();
       ctx.logger.info(`selected knowledge workspace: ${result.vaultRoot}`);
       sendJson(res, 200, {
         ...result,
@@ -443,7 +746,7 @@ function createBrandLogoHandler(logoBytes) {
 }
 
 async function apply(ctx) {
-  const state = { vaultRoot: await resolveVaultRoot() };
+  const state = { vaultRoot: await resolveVaultRoot(), graphCache: new Map() };
   const brandLogo = await readFile(BRAND_LOGO_SOURCE);
   const favicon = await readFile(FAVICON_SOURCE);
 
@@ -479,6 +782,11 @@ async function apply(ctx) {
       path: `${API_PREFIX}/file`,
       handler: createApiHandler(() => state.vaultRoot, previewFile),
     });
+    const disposeGraph = ctx.webServer.register({
+      kind: "exact",
+      path: `${API_PREFIX}/graph`,
+      handler: createGraphHandler(() => state.vaultRoot, state.graphCache),
+    });
     const disposeInitialize = ctx.webServer.register({
       kind: "exact",
       path: `${API_PREFIX}/initialize`,
@@ -504,6 +812,7 @@ async function apply(ctx) {
       disposeBrandLogo();
       disposeSelect();
       disposeInitialize();
+      disposeGraph();
       disposeFile();
       disposeList();
     };
