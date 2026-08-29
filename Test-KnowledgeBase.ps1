@@ -14,7 +14,6 @@ $launcher = Join-Path $productRoot "Start-DeepSeekHarness.ps1"
 $initializer = Join-Path $productRoot "Initialize-KnowledgeBase.ps1"
 $pluginPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\index.js"
 $clientPluginPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\client.js"
-$brandLogoPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\bkcs-logo.png"
 $manifestPath = Join-Path $productRoot "package.json"
 
 foreach ($path in @(
@@ -23,7 +22,6 @@ foreach ($path in @(
     $initializer,
     $pluginPath,
     $clientPluginPath,
-    $brandLogoPath,
     $manifestPath,
     (Join-Path $vaultTemplateRoot "AGENTS.md"),
     (Join-Path $vaultTemplateRoot ".agents\scripts\knowledge_router.py")
@@ -90,6 +88,8 @@ finally {
 
 $smokeRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("KnowledgeVaultHarness-release-test-" + [guid]::NewGuid().ToString("N"))
 $initializedVault = Join-Path $smokeRoot "vault"
+$uiInitializedVault = Join-Path $smokeRoot "ui-vault"
+$nonEmptyVault = Join-Path $smokeRoot "non-empty-vault"
 $runtimeRoot = Join-Path $smokeRoot "runtime"
 $stdoutPath = Join-Path $smokeRoot "stdout.log"
 $stderrPath = Join-Path $smokeRoot "stderr.log"
@@ -193,23 +193,14 @@ try {
     if (
         $clientBundleResponse.StatusCode -ne 200 -or
         $clientBundleResponse.Content -notmatch 'kv-explorer' -or
-        $clientBundleResponse.Content -notmatch 'kv-hero-logo' -or
-        $clientBundleResponse.Content -notmatch '/knowledge-vault/assets/bkcs-logo.png' -or
+        $clientBundleResponse.Content -notmatch 'kv-init-launcher' -or
+        $clientBundleResponse.Content -notmatch 'ctx.workspaces.pickDirectory' -or
+        $clientBundleResponse.Content -notmatch 'postJson\("initialize"' -or
         $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
-        $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"'
+        $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
+        $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-initializer"'
     ) {
         throw "The Knowledge Vault right-panel client bundle is not available."
-    }
-    $brandLogoResponse = Invoke-WebRequest `
-        -Uri ("http://127.0.0.1:{0}/knowledge-vault/assets/bkcs-logo.png" -f $port) `
-        -UseBasicParsing `
-        -TimeoutSec 5
-    if (
-        $brandLogoResponse.StatusCode -ne 200 -or
-        [string]$brandLogoResponse.Headers["Content-Type"] -notmatch '^image/png' -or
-        $brandLogoResponse.RawContentLength -lt 1024
-    ) {
-        throw "The BKCS brand logo is not available from the Web UI."
     }
 
     $patchPath = Join-Path $runtimeRoot "generated\knowledge-vault.patch.yml"
@@ -233,6 +224,59 @@ try {
     if (-not $filePreview.previewable -or [string]::IsNullOrWhiteSpace([string]$filePreview.content)) {
         throw "The right-panel Vault browser API could not preview AGENTS.md."
     }
+
+    Write-Host "Initializing another Vault through the in-app API..."
+    New-Item -ItemType Directory -Force -Path $nonEmptyVault | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $nonEmptyVault "keep.txt"), "must not be overwritten", [System.Text.Encoding]::UTF8)
+    $nonEmptyRejected = $false
+    try {
+        Invoke-RestMethod `
+            -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/initialize" -f $port) `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body (@{ destination = $nonEmptyVault } | ConvertTo-Json) `
+            -TimeoutSec 5 | Out-Null
+    }
+    catch {
+        $nonEmptyRejected = $_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::Conflict
+    }
+    if (-not $nonEmptyRejected -or -not (Test-Path -LiteralPath (Join-Path $nonEmptyVault "keep.txt") -PathType Leaf)) {
+        throw "The in-app initializer did not safely reject a normal non-empty directory."
+    }
+
+    $uiInitialization = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/initialize" -f $port) `
+        -Method Post `
+        -ContentType "application/json" `
+        -Body (@{ destination = $uiInitializedVault } | ConvertTo-Json) `
+        -TimeoutSec 30
+    if ($uiInitialization.alreadyInitialized) {
+        throw "The in-app initializer incorrectly reported a clean target as already initialized."
+    }
+    foreach ($requiredVaultEntry in @("AGENTS.md", "01_Inbox", "07_Attachments", ".dsh\skills")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $uiInitializedVault $requiredVaultEntry))) {
+            throw "The in-app initialized Vault is missing: $requiredVaultEntry"
+        }
+    }
+    $uiProductConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $runtimeRoot "product.json") | ConvertFrom-Json
+    if (-not [string]::Equals([string]$uiProductConfig.vaultRoot, $uiInitializedVault, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The in-app initializer did not persist the newly selected Vault path."
+    }
+    $uiVaultTree = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/list?path=" -f $port) `
+        -Method Get `
+        -TimeoutSec 5
+    if (-not [string]::Equals([string]$uiVaultTree.rootName, "ui-vault", [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "The right-panel browser did not switch to the in-app initialized Vault."
+    }
+    $uiWorkspaceResponse = Invoke-DshRpc -Method "workspace.list" -Payload @{} -RpcId "release-ui-workspace"
+    $uiWorkspace = @($uiWorkspaceResponse.result.value.items) | Where-Object {
+        [string]::Equals([string]$_.path, $uiInitializedVault, [System.StringComparison]::OrdinalIgnoreCase)
+    } | Select-Object -First 1
+    if ($null -eq $uiWorkspace) {
+        throw "The in-app initialized Vault was not registered as a Harness workspace."
+    }
+    $workspace = $uiWorkspace
 
     $sessionResponse = Invoke-DshRpc `
         -Method "session.create" `
@@ -267,10 +311,10 @@ try {
     Write-Host "Release validation passed."
     Write-Host "  DeepSeek Harness : $actualDshVersion"
     Write-Host "  One-click init   : $initializedVault"
+    Write-Host "  In-app init      : $uiInitializedVault"
     Write-Host "  Web UI           : HTTP $($webResponse.StatusCode)"
     Write-Host "  Workspace        : $($workspace.title)"
     Write-Host "  Vault browser    : $($rootEntries.Count) root entries"
-    Write-Host "  BKCS brand logo  : $($brandLogoResponse.RawContentLength) bytes"
     Write-Host "  Bundled skills   : $($expectedSkills.Count)"
 }
 finally {

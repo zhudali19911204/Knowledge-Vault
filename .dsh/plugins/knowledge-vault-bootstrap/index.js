@@ -1,12 +1,31 @@
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
-import { basename, extname, relative, resolve, sep } from "node:path";
+import {
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 
 const name = "knowledge-vault-bootstrap";
 const inject = ["workspaceRegistry", "webServer"];
 const API_PREFIX = "/knowledge-vault/api";
-const BRAND_LOGO_ROUTE = "/knowledge-vault/assets/bkcs-logo.png";
-const BRAND_LOGO_SOURCE = new URL("./assets/bkcs-logo.png", import.meta.url);
 const MAX_PREVIEW_BYTES = 1024 * 1024;
+const MAX_INITIALIZE_BODY_BYTES = 16 * 1024;
 const TEXT_EXTENSIONS = new Set([
   ".md",
   ".txt",
@@ -40,6 +59,23 @@ async function resolveVaultRoot() {
   return canonical;
 }
 
+async function resolveInitializationPaths() {
+  const templateRequested = process.env.KNOWLEDGE_VAULT_TEMPLATE_ROOT;
+  const productRequested = process.env.KNOWLEDGE_VAULT_PRODUCT_ROOT;
+  const configRequested = process.env.KNOWLEDGE_VAULT_PRODUCT_CONFIG;
+  if (!templateRequested || !productRequested || !configRequested) {
+    throw Object.assign(new Error("当前启动方式未启用知识库初始化功能。"), { statusCode: 503 });
+  }
+
+  const templateRoot = await realpath(templateRequested);
+  const productRoot = await realpath(productRequested);
+  const productConfig = resolve(configRequested);
+  if (!(await stat(templateRoot)).isDirectory()) {
+    throw new Error(`Knowledge Vault template root is not a directory: ${templateRoot}`);
+  }
+  return { templateRoot, productRoot, productConfig };
+}
+
 function sendJson(res, statusCode, value) {
   res.statusCode = statusCode;
   res.setHeader("content-type", "application/json; charset=utf-8");
@@ -50,6 +86,139 @@ function sendJson(res, statusCode, value) {
 
 function normalizedRelative(root, target) {
   return relative(root, target).split(sep).join("/");
+}
+
+function containsPath(parent, target) {
+  const child = relative(parent, target);
+  return child === "" || (child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child));
+}
+
+function pathsOverlap(left, right) {
+  return containsPath(left, right) || containsPath(right, left);
+}
+
+async function isInitializedVault(vaultRoot) {
+  const agents = await stat(join(vaultRoot, "AGENTS.md")).catch(() => undefined);
+  const inbox = await stat(join(vaultRoot, "01_Inbox")).catch(() => undefined);
+  return agents?.isFile() === true && inbox?.isDirectory() === true;
+}
+
+async function assertTemplateTreeSafe(directory) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const source = join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Knowledge Vault template contains a symbolic link: ${source}`);
+    }
+    if (entry.isDirectory()) {
+      await assertTemplateTreeSafe(source);
+    } else if (!entry.isFile()) {
+      throw new Error(`Knowledge Vault template contains an unsupported entry: ${source}`);
+    }
+  }
+  return entries;
+}
+
+async function copyTemplateIntoEmptyVault(templateRoot, vaultRoot) {
+  const templateEntries = await assertTemplateTreeSafe(templateRoot);
+  const stageRoot = join(dirname(vaultRoot), `.knowledge-vault-initialize-${randomUUID()}`);
+  const movedNames = [];
+  await mkdir(stageRoot);
+  try {
+    for (const entry of templateEntries) {
+      await cp(join(templateRoot, entry.name), join(stageRoot, entry.name), {
+        recursive: entry.isDirectory(),
+        errorOnExist: true,
+        force: false,
+        preserveTimestamps: true,
+      });
+    }
+    for (const entry of templateEntries) {
+      await rename(join(stageRoot, entry.name), join(vaultRoot, entry.name));
+      movedNames.push(entry.name);
+    }
+  } catch (error) {
+    for (const movedName of movedNames.reverse()) {
+      await rm(join(vaultRoot, movedName), { recursive: true, force: true }).catch(() => {});
+    }
+    throw error;
+  } finally {
+    await rm(stageRoot, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function persistSelectedVault(productConfig, vaultRoot) {
+  await mkdir(dirname(productConfig), { recursive: true });
+  const value = {
+    vaultRoot,
+    initializedAt: new Date().toISOString(),
+  };
+  await writeFile(productConfig, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+async function initializeVault(destination) {
+  if (typeof destination !== "string" || destination.trim() === "" || destination.includes("\0")) {
+    throw Object.assign(new Error("请选择一个有效的知识库目录。"), { statusCode: 400 });
+  }
+  if (!isAbsolute(destination)) {
+    throw Object.assign(new Error("知识库目录必须使用绝对路径。"), { statusCode: 400 });
+  }
+
+  const { templateRoot, productRoot, productConfig } = await resolveInitializationPaths();
+  await mkdir(destination, { recursive: true });
+  const vaultRoot = await realpath(destination);
+  const dataRoot = dirname(productConfig);
+  if (pathsOverlap(vaultRoot, productRoot)) {
+    throw Object.assign(new Error("请选择应用程序目录以外的位置。"), { statusCode: 400 });
+  }
+  if (pathsOverlap(vaultRoot, dataRoot)) {
+    throw Object.assign(new Error("知识库目录不能与 Harness 用户数据目录重叠。"), { statusCode: 400 });
+  }
+
+  const alreadyInitialized = await isInitializedVault(vaultRoot);
+  const existingEntries = await readdir(vaultRoot);
+  if (!alreadyInitialized && existingEntries.length > 0) {
+    throw Object.assign(
+      new Error("所选文件夹不是空文件夹。请选择空文件夹或已有的 Knowledge Vault。"),
+      { statusCode: 409 },
+    );
+  }
+
+  if (!alreadyInitialized) {
+    await copyTemplateIntoEmptyVault(templateRoot, vaultRoot);
+  }
+  await persistSelectedVault(productConfig, vaultRoot);
+  return { vaultRoot, alreadyInitialized };
+}
+
+async function readJsonBody(req) {
+  let body = "";
+  for await (const chunk of req) {
+    body += chunk.toString("utf8");
+    if (Buffer.byteLength(body, "utf8") > MAX_INITIALIZE_BODY_BYTES) {
+      throw Object.assign(new Error("请求内容过大。"), { statusCode: 413 });
+    }
+  }
+  try {
+    return JSON.parse(body || "{}");
+  } catch {
+    throw Object.assign(new Error("请求内容不是有效的 JSON。"), { statusCode: 400 });
+  }
+}
+
+function assertSameOrigin(req) {
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  if (!origin || !host) return;
+  let originHost;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    throw Object.assign(new Error("无效的请求来源。"), { statusCode: 403 });
+  }
+  if (originHost.toLowerCase() !== host.toLowerCase()) {
+    throw Object.assign(new Error("不允许从其他页面初始化本机知识库。"), { statusCode: 403 });
+  }
 }
 
 async function resolveVaultPath(vaultRoot, requestedPath) {
@@ -121,7 +290,7 @@ async function previewFile(vaultRoot, requestedPath) {
   };
 }
 
-function createApiHandler(vaultRoot, operation) {
+function createApiHandler(resolveActiveVault, operation) {
   return async (req, res) => {
     if (req.method !== "GET" && req.method !== "HEAD") {
       sendJson(res, 405, { error: "Method not allowed." });
@@ -131,7 +300,7 @@ function createApiHandler(vaultRoot, operation) {
     try {
       const url = new URL(req.url || "/", "http://127.0.0.1");
       const requestedPath = url.searchParams.get("path") || "";
-      const value = await operation(vaultRoot, requestedPath);
+      const value = await operation(resolveActiveVault(), requestedPath);
       if (req.method === "HEAD") {
         res.statusCode = 200;
         res.end();
@@ -147,41 +316,60 @@ function createApiHandler(vaultRoot, operation) {
   };
 }
 
-function createBrandLogoHandler(logoBytes) {
-  return (req, res) => {
-    if (req.method !== "GET" && req.method !== "HEAD") {
+function createInitializationHandler(ctx, state) {
+  return async (req, res) => {
+    if (req.method !== "POST") {
       sendJson(res, 405, { error: "Method not allowed." });
       return;
     }
-    res.statusCode = 200;
-    res.setHeader("content-type", "image/png");
-    res.setHeader("content-length", String(logoBytes.length));
-    res.setHeader("cache-control", "no-store");
-    res.setHeader("x-content-type-options", "nosniff");
-    res.end(req.method === "HEAD" ? undefined : logoBytes);
+
+    try {
+      assertSameOrigin(req);
+      const body = await readJsonBody(req);
+      const result = await initializeVault(body.destination);
+      let workspace = await ctx.workspaceRegistry.resolveByPath(result.vaultRoot);
+      if (workspace === undefined) {
+        workspace = await ctx.workspaceRegistry.create(result.vaultRoot);
+      }
+      const title = basename(result.vaultRoot);
+      if (title && workspace.title !== title) {
+        await workspace.setTitle(title);
+      }
+      state.vaultRoot = result.vaultRoot;
+      ctx.logger.info(`initialized and selected knowledge workspace: ${result.vaultRoot}`);
+      sendJson(res, 200, {
+        ...result,
+        workspaceId: workspace.id,
+      });
+    } catch (error) {
+      const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+      ctx.logger.warn(`knowledge Vault initialization failed: ${error?.stack || error}`);
+      sendJson(res, statusCode, {
+        error: statusCode === 500 ? "初始化知识库失败，请查看启动窗口中的错误信息。" : error.message,
+      });
+    }
   };
 }
 
 async function apply(ctx) {
-  const vaultRoot = await resolveVaultRoot();
-  const brandLogo = await readFile(BRAND_LOGO_SOURCE);
+  const state = { vaultRoot: await resolveVaultRoot() };
 
   await ctx.effect(async () => {
-    let workspace = await ctx.workspaceRegistry.resolveByPath(vaultRoot);
+    let workspace = await ctx.workspaceRegistry.resolveByPath(state.vaultRoot);
     const created = workspace === undefined;
 
     if (created) {
-      workspace = await ctx.workspaceRegistry.create(vaultRoot);
+      workspace = await ctx.workspaceRegistry.create(state.vaultRoot);
     }
 
     const requestedTitle = process.env.KNOWLEDGE_VAULT_TITLE?.trim();
-    const title = requestedTitle || basename(vaultRoot);
+    const title = requestedTitle || basename(state.vaultRoot);
     if (title && workspace.title !== title) {
       await workspace.setTitle(title);
     }
 
     ctx.logger.info(
-      `${created ? "registered" : "reused"} bundled knowledge workspace: ${vaultRoot}`,
+      `${created ? "registered" : "reused"} bundled knowledge workspace: ${state.vaultRoot}`,
     );
 
     return () => {};
@@ -191,24 +379,24 @@ async function apply(ctx) {
     const disposeList = ctx.webServer.register({
       kind: "exact",
       path: `${API_PREFIX}/list`,
-      handler: createApiHandler(vaultRoot, listDirectory),
+      handler: createApiHandler(() => state.vaultRoot, listDirectory),
     });
     const disposeFile = ctx.webServer.register({
       kind: "exact",
       path: `${API_PREFIX}/file`,
-      handler: createApiHandler(vaultRoot, previewFile),
+      handler: createApiHandler(() => state.vaultRoot, previewFile),
     });
-    const disposeBrandLogo = ctx.webServer.register({
+    const disposeInitialize = ctx.webServer.register({
       kind: "exact",
-      path: BRAND_LOGO_ROUTE,
-      handler: createBrandLogoHandler(brandLogo),
+      path: `${API_PREFIX}/initialize`,
+      handler: createInitializationHandler(ctx, state),
     });
     return () => {
-      disposeBrandLogo();
+      disposeInitialize();
       disposeFile();
       disposeList();
     };
-  }, "knowledge-vault-bootstrap: Vault browser and brand assets");
+  }, "knowledge-vault-bootstrap: Vault browser and initializer API");
 }
 
 export { apply, inject, name };

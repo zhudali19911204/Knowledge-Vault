@@ -8,15 +8,22 @@ window.__ModuleLoader__.load({
     const React = require("react");
     const e = React.createElement;
     const API_PREFIX = "/knowledge-vault/api";
-    const BRAND_LOGO_URL = "/knowledge-vault/assets/bkcs-logo.png";
     const STYLE_ID = "@knowledge-vault/dsh-bootstrap/client.css";
     const css = `
       :root{--kv-browser-width:360px}
       @media(max-width:1200px){:root{--kv-browser-width:320px}}
-      .kv-sidebar-logo{display:block;width:150px;max-width:100%;height:auto;border-radius:5px}
-      .kv-hero-logo{display:block;width:min(360px,70vw);height:auto;border-radius:10px;box-shadow:0 10px 30px #00000014}
-      span:has(> .kv-hero-logo){grid-column:1/4;justify-self:center;width:auto;height:auto}
-      span:has(> .kv-hero-logo)~span{display:none}
+      .kv-brand-mark{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;background:linear-gradient(145deg,#315b4c,#79a789);color:#fff;font-size:14px;font-weight:700;box-shadow:0 4px 14px #315b4c33}
+      .kv-brand-name{font-size:15px;font-weight:650;letter-spacing:.02em;color:var(--dsw-alias-label-primary);white-space:nowrap}
+      .kv-init-launcher{box-sizing:border-box;flex:none;margin:0 2px 8px;min-width:0}
+      .kv-init-button{box-sizing:border-box;width:100%;height:38px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-button-elevated-fill);color:var(--dsw-alias-label-primary);display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 12px;cursor:pointer;font:500 14px/22px var(--dsw-font-family);white-space:nowrap;overflow:hidden}
+      .kv-init-button:hover{background:var(--dsw-alias-button-floating-hover)}
+      .kv-init-button:disabled{cursor:wait;opacity:.65}
+      .kv-init-icon{font-size:17px;line-height:18px;flex:none}
+      .kv-init-status{padding:5px 6px 0;color:var(--dsw-alias-label-tertiary);font:11px/16px var(--dsw-font-family);overflow-wrap:anywhere}
+      [class*="_collapsed"] .kv-init-launcher{width:36px;margin:0 0 12px}
+      [class*="_collapsed"] .kv-init-button{width:36px;height:36px;border-color:transparent;background:transparent;padding:0}
+      [class*="_collapsed"] .kv-init-button:hover{background:var(--dsw-alias-interactive-bg-hover)}
+      [class*="_collapsed"] .kv-init-label,[class*="_collapsed"] .kv-init-status{display:none}
       .kv-explorer{position:absolute;top:0;right:0;bottom:0;width:var(--kv-browser-width);box-sizing:border-box;min-width:0;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);border-left:1px solid var(--dsw-alias-border-l2);font-family:var(--dsw-font-family);box-shadow:-8px 0 24px #0000000a}
       .kv-explorer-header{height:52px;box-sizing:border-box;display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--dsw-alias-border-l2);flex:0 0 auto}
       .kv-explorer-title{min-width:0;flex:1;font-size:14px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -50,6 +57,17 @@ window.__ModuleLoader__.load({
         headers: { accept: "application/json" },
       });
       const body = await response.json();
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      return body;
+    }
+
+    async function postJson(route, value) {
+      const response = await fetch(`${API_PREFIX}/${route}`, {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify(value),
+      });
+      const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
       return body;
     }
@@ -149,6 +167,16 @@ window.__ModuleLoader__.load({
         return () => { alive = false; };
       }, [revision]);
 
+      React.useEffect(() => {
+        const refreshActiveVault = () => {
+          setSelected(null);
+          setPreview(null);
+          setRevision((value) => value + 1);
+        };
+        window.addEventListener("knowledge-vault:changed", refreshActiveVault);
+        return () => window.removeEventListener("knowledge-vault:changed", refreshActiveVault);
+      }, []);
+
       const selectFile = async (entry) => {
         setSelected(entry);
         setPreview({ loading: true, name: entry.name, path: entry.path });
@@ -204,36 +232,119 @@ window.__ModuleLoader__.load({
       );
     }
 
+    function createInitializationLauncher(ctx) {
+      return function KnowledgeVaultInitializationLauncher() {
+        React.useEffect(() => {
+          let disposed = false;
+          let resetTimer = 0;
+          const launcher = document.createElement("div");
+          launcher.className = "kv-init-launcher";
+
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "kv-init-button";
+          button.title = "在指定位置初始化并切换到自己的知识库";
+          button.setAttribute("aria-label", "初始化知识库");
+
+          const icon = document.createElement("span");
+          icon.className = "kv-init-icon";
+          icon.setAttribute("aria-hidden", "true");
+          icon.textContent = "⊕";
+          const label = document.createElement("span");
+          label.className = "kv-init-label";
+          label.textContent = "初始化知识库";
+          const status = document.createElement("div");
+          status.className = "kv-init-status";
+          status.setAttribute("role", "status");
+          status.setAttribute("aria-live", "polite");
+          button.append(icon, label);
+          launcher.append(button, status);
+
+          const setState = (text, detail = "", busy = false) => {
+            label.textContent = text;
+            status.textContent = detail;
+            button.title = detail || "在指定位置初始化并切换到自己的知识库";
+            button.disabled = busy;
+          };
+
+          const attach = () => {
+            if (disposed) return;
+            const newSessionButton = document.querySelector('button[class*="_newSession"]');
+            if (newSessionButton && newSessionButton.nextElementSibling !== launcher) {
+              newSessionButton.insertAdjacentElement("afterend", launcher);
+            }
+          };
+
+          const initialize = async () => {
+            window.clearTimeout(resetTimer);
+            try {
+              setState("选择知识库位置…", "请选择空文件夹或已有的 Knowledge Vault。", true);
+              const destination = await ctx.workspaces.pickDirectory();
+              if (destination === null || disposed) {
+                setState("初始化知识库");
+                return;
+              }
+              setState("正在初始化…", destination, true);
+              const result = await postJson("initialize", { destination });
+              const workspace = await ctx.workspaces.create({ path: result.vaultRoot });
+              if (disposed) return;
+              window.dispatchEvent(new CustomEvent("knowledge-vault:changed", {
+                detail: { vaultRoot: result.vaultRoot },
+              }));
+              ctx.workspaces.startSession(workspace.workspaceId);
+              setState(
+                result.alreadyInitialized ? "已切换知识库" : "初始化完成",
+                result.vaultRoot,
+              );
+              resetTimer = window.setTimeout(() => {
+                if (!disposed) setState("初始化知识库");
+              }, 5000);
+            } catch (cause) {
+              if (disposed) return;
+              const message = cause instanceof Error ? cause.message : String(cause);
+              setState("初始化失败", message);
+            }
+          };
+
+          button.addEventListener("click", initialize);
+          const observer = new MutationObserver(attach);
+          observer.observe(document.body, { childList: true, subtree: true });
+          attach();
+          return () => {
+            disposed = true;
+            window.clearTimeout(resetTimer);
+            observer.disconnect();
+            button.removeEventListener("click", initialize);
+            launcher.remove();
+          };
+        }, []);
+        return null;
+      };
+    }
+
     function BrandMark() {
-      return null;
+      return e("span", { className: "kv-brand-mark", "aria-hidden": true }, "知");
     }
 
     function BrandName() {
-      return e("img", {
-        className: "kv-sidebar-logo",
-        src: BRAND_LOGO_URL,
-        alt: "BKCS · 贝内克长顺",
-      });
+      return e("span", { className: "kv-brand-name" }, "Knowledge Vault");
     }
 
-    function HeroBrandMark() {
-      return e("img", {
-        className: "kv-hero-logo",
-        src: BRAND_LOGO_URL,
-        alt: "BKCS · 贝内克长顺",
-      });
-    }
-
-    const inject = ["slots"];
+    const inject = ["slots", "workspaces"];
     function apply(ctx) {
+      const InitializationLauncher = createInitializationLauncher(ctx);
       ctx.slots.inject("shell.overlay", () => ctx.slots.register({
         name: "shell.overlay",
         id: "knowledge-vault-browser",
         order: 100,
       }, VaultExplorer));
+      ctx.slots.inject("shell.overlay", () => ctx.slots.register({
+        name: "shell.overlay",
+        id: "knowledge-vault-initializer",
+        order: 101,
+      }, InitializationLauncher));
       ctx.slots.inject("sidebar.brand.mark", () => ctx.slots.register({ name: "sidebar.brand.mark", priority: -100 }, BrandMark));
       ctx.slots.inject("sidebar.brand.name", () => ctx.slots.register({ name: "sidebar.brand.name", priority: -100 }, BrandName));
-      ctx.slots.inject("conversation.hero.brand.mark", () => ctx.slots.register({ name: "conversation.hero.brand.mark", priority: -100 }, HeroBrandMark));
     }
 
     exports.apply = apply;

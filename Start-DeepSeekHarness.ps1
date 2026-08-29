@@ -127,14 +127,6 @@ try {
         }
         Copy-Item -LiteralPath $pluginSource -Destination (Join-Path $runtimePluginRoot $pluginFileName) -Force
     }
-    $brandLogoSource = Join-Path $bootstrapPluginRoot "assets\bkcs-logo.png"
-    if (-not (Test-Path -LiteralPath $brandLogoSource -PathType Leaf)) {
-        throw "Missing BKCS brand logo: $brandLogoSource"
-    }
-    $runtimeAssetsRoot = Join-Path $runtimePluginRoot "assets"
-    New-Item -ItemType Directory -Force -Path $runtimeAssetsRoot | Out-Null
-    Copy-Item -LiteralPath $brandLogoSource -Destination (Join-Path $runtimeAssetsRoot "bkcs-logo.png") -Force
-
     $template = Get-Content -Raw -Encoding UTF8 -LiteralPath $patchTemplatePath
     $utf8WithoutBom = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($generatedPatchPath, $template, $utf8WithoutBom)
@@ -142,6 +134,9 @@ try {
     $previousDshHome = [Environment]::GetEnvironmentVariable("DSH_HOME", "Process")
     $previousVaultRoot = [Environment]::GetEnvironmentVariable("KNOWLEDGE_VAULT_ROOT", "Process")
     $previousVaultTitle = [Environment]::GetEnvironmentVariable("KNOWLEDGE_VAULT_TITLE", "Process")
+    $previousVaultTemplateRoot = [Environment]::GetEnvironmentVariable("KNOWLEDGE_VAULT_TEMPLATE_ROOT", "Process")
+    $previousVaultProductRoot = [Environment]::GetEnvironmentVariable("KNOWLEDGE_VAULT_PRODUCT_ROOT", "Process")
+    $previousVaultProductConfig = [Environment]::GetEnvironmentVariable("KNOWLEDGE_VAULT_PRODUCT_CONFIG", "Process")
     $previousNodeUseSystemCa = [Environment]::GetEnvironmentVariable("NODE_USE_SYSTEM_CA", "Process")
     try {
         $env:DSH_HOME = $dshDataRoot
@@ -152,6 +147,9 @@ try {
         else {
             Split-Path -Leaf $vaultRoot
         }
+        $env:KNOWLEDGE_VAULT_TEMPLATE_ROOT = $vaultTemplateRoot
+        $env:KNOWLEDGE_VAULT_PRODUCT_ROOT = $productRoot
+        $env:KNOWLEDGE_VAULT_PRODUCT_CONFIG = Join-Path $DataRoot "product.json"
         $env:NODE_USE_SYSTEM_CA = "1"
 
         $arguments = @("--patch", $generatedPatchPath, "--profile", "web", "--host", "127.0.0.1", "--port", [string]$Port)
@@ -169,6 +167,9 @@ try {
             @{ Name = "DSH_HOME"; Value = $previousDshHome },
             @{ Name = "KNOWLEDGE_VAULT_ROOT"; Value = $previousVaultRoot },
             @{ Name = "KNOWLEDGE_VAULT_TITLE"; Value = $previousVaultTitle },
+            @{ Name = "KNOWLEDGE_VAULT_TEMPLATE_ROOT"; Value = $previousVaultTemplateRoot },
+            @{ Name = "KNOWLEDGE_VAULT_PRODUCT_ROOT"; Value = $previousVaultProductRoot },
+            @{ Name = "KNOWLEDGE_VAULT_PRODUCT_CONFIG"; Value = $previousVaultProductConfig },
             @{ Name = "NODE_USE_SYSTEM_CA"; Value = $previousNodeUseSystemCa }
         )) {
             if ($null -eq $entry.Value) {
