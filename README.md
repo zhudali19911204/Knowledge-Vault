@@ -55,8 +55,8 @@ corepack pnpm install --frozen-lockfile
 
 | 版本 | 文件 | 使用方式 |
 |---|---|---|
-| 安装版（推荐） | `Knowledge-Vault-Setup-1.0.7-win-x64.exe` | 双击安装，可选择安装目录；安装后从桌面或开始菜单启动 |
-| 免安装版 | `Knowledge-Vault-Harness-Portable-1.0.7-win-x64.zip` | 完整解压 ZIP，再双击其中的 `Knowledge Vault.exe` |
+| 安装版（推荐） | `Knowledge-Vault-Setup-1.1.2-win-x64.exe` | 双击安装，可选择安装目录；安装后从桌面或开始菜单启动 |
+| 免安装版 | `Knowledge-Vault-Harness-Portable-1.1.2-win-x64.zip` | 完整解压 ZIP，再双击其中的 `Knowledge Vault.exe` |
 
 不要直接在 ZIP 压缩包里运行程序。应用和知识库建议放在两个不同位置，例如：
 
@@ -393,8 +393,8 @@ git commit -m "Initialize knowledge base"
 
 构建成功后会生成：
 
-- `dist/Knowledge-Vault-Setup-1.0.7-win-x64.exe`
-- `dist/Knowledge-Vault-Harness-Portable-1.0.7-win-x64.zip`
+- `dist/Knowledge-Vault-Setup-1.1.2-win-x64.exe`
+- `dist/Knowledge-Vault-Harness-Portable-1.1.2-win-x64.zip`
 - 两个产物各自对应的 `.sha256` 文件
 
 桌面构建会先执行完整自检，再生成独立生产依赖、内置当前 x64 Node.js、构建 NSIS 安装器、启动打包后的 EXE 做隔离冒烟测试，最后校验 ZIP 结构和哈希。若已经单独执行过完整自检，可使用 `-SkipValidation`；若锁定依赖已经安装，可额外使用 `-SkipDependencyInstall`。
@@ -405,7 +405,7 @@ git commit -m "Initialize knowledge base"
 ./Build-Distribution.ps1
 ```
 
-默认产物为 `dist/Knowledge-Vault-Harness-1.0.7.zip` 和对应的 `.sha256` 文件。构建器会检查 ZIP 必需入口，排除 Git 历史、`node_modules`、缓存、Obsidian 私有布局和本机运行状态，并在发现常见凭据文件名时拒绝打包。发布前仍应人工检查知识正文和附件是否适合共享。
+默认产物为 `dist/Knowledge-Vault-Harness-1.1.2.zip` 和对应的 `.sha256` 文件。构建器会检查 ZIP 必需入口，排除 Git 历史、`node_modules`、缓存、Obsidian 私有布局和本机运行状态，并在发现常见凭据文件名时拒绝打包。发布前仍应人工检查知识正文和附件是否适合共享。
 
 ## 系统要求
 
