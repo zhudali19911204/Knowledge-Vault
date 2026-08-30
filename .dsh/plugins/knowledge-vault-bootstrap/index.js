@@ -32,6 +32,7 @@ const GRAPH_WORKER_ROUTE = "/knowledge-vault/assets/graph-worker.js";
 const GRAPH_WORKER_SOURCE = new URL("./graph-worker.js", import.meta.url);
 const GRAPH_SETTINGS_FILE = "graph-settings.json";
 const MAX_PREVIEW_BYTES = 1024 * 1024;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_INITIALIZE_BODY_BYTES = 16 * 1024;
 const MAX_GRAPH_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_GRAPH_FILES = 5000;
@@ -103,6 +104,19 @@ const TEXT_EXTENSIONS = new Set([
   ".cmd",
   ".xml",
   ".toml",
+]);
+const IMAGE_CONTENT_TYPES = new Map([
+  [".avif", "image/avif"],
+  [".bmp", "image/bmp"],
+  [".gif", "image/gif"],
+  [".ico", "image/x-icon"],
+  [".jpeg", "image/jpeg"],
+  [".jpg", "image/jpeg"],
+  [".png", "image/png"],
+  [".svg", "image/svg+xml"],
+  [".tif", "image/tiff"],
+  [".tiff", "image/tiff"],
+  [".webp", "image/webp"],
 ]);
 
 async function resolveVaultRoot() {
@@ -978,6 +992,49 @@ function createStatsHandler(resolveActiveVault, graphCache, statsCache) {
   };
 }
 
+function createVaultImageHandler(resolveActiveVault) {
+  return async (req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      sendJson(res, 405, { error: "Method not allowed." });
+      return;
+    }
+
+    try {
+      const url = new URL(req.url || "/", "http://127.0.0.1");
+      const requestedPath = url.searchParams.get("path") || "";
+      if (!requestedPath) {
+        throw Object.assign(new Error("Image path is required."), { statusCode: 400 });
+      }
+      const target = await resolveVaultPath(resolveActiveVault(), requestedPath);
+      const details = await stat(target);
+      if (!details.isFile()) {
+        throw Object.assign(new Error("Requested Vault entry is not a file."), { statusCode: 400 });
+      }
+      const contentType = IMAGE_CONTENT_TYPES.get(extname(target).toLowerCase());
+      if (!contentType) {
+        throw Object.assign(new Error("Only image attachments can be displayed."), { statusCode: 415 });
+      }
+      if (details.size > MAX_IMAGE_BYTES) {
+        throw Object.assign(new Error("Image attachment exceeds the 25 MB display limit."), { statusCode: 413 });
+      }
+
+      res.statusCode = 200;
+      res.setHeader("content-type", contentType);
+      res.setHeader("content-length", String(details.size));
+      res.setHeader("cache-control", "no-store");
+      res.setHeader("content-security-policy", "default-src 'none'; sandbox");
+      res.setHeader("cross-origin-resource-policy", "same-origin");
+      res.setHeader("x-content-type-options", "nosniff");
+      res.end(req.method === "HEAD" ? undefined : await readFile(target));
+    } catch (error) {
+      const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+      sendJson(res, statusCode, {
+        error: statusCode === 500 ? "Unable to read the requested Vault image." : error.message,
+      });
+    }
+  };
+}
+
 function createGraphSettingsHandler(ctx) {
   return async (req, res) => {
     if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "POST") {
@@ -1156,6 +1213,11 @@ async function apply(ctx) {
       path: `${API_PREFIX}/file`,
       handler: createApiHandler(() => state.vaultRoot, previewFile),
     });
+    const disposeImage = ctx.webServer.register({
+      kind: "exact",
+      path: `${API_PREFIX}/image`,
+      handler: createVaultImageHandler(() => state.vaultRoot),
+    });
     const disposeGraph = ctx.webServer.register({
       kind: "exact",
       path: `${API_PREFIX}/graph`,
@@ -1205,6 +1267,7 @@ async function apply(ctx) {
       disposeGraphSettings();
       disposeStats();
       disposeGraph();
+      disposeImage();
       disposeFile();
       disposeList();
     };

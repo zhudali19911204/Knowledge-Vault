@@ -105,18 +105,21 @@ source = source.replace(marker, `
       createGraphSimulation,
       reheatGraphSimulation,
       tickGraphSimulation,
+      renderMarkdownSource,
     };
 ${marker}`);
 let plugin;
 const React = { createElement() {} };
 const sandbox = {
   window: {
+    location: { origin: "http://127.0.0.1:3080" },
     __ModuleLoader__: {
       load(definition) {
         plugin = definition.factory((name) => name === "react" ? React : {});
       },
     },
   },
+  URL,
 };
 vm.runInNewContext(source, sandbox, { filename: clientPath });
 const helpers = plugin?.__graphTest;
@@ -152,6 +155,27 @@ dragged.fy = null;
 helpers.reheatGraphSimulation(simulation, .6);
 for (let index = 0; index < 12; index += 1) helpers.tickGraphSimulation(simulation);
 if (dragged.x === 40 && dragged.y === -25) throw new Error("Released node did not rejoin the layout.");
+const obsidianImage = helpers.renderMarkdownSource(
+  "![[07_Attachments/0701_Project/demo image.png]]",
+  "03_Areas/0301_Project/Reader.md",
+);
+if (!obsidianImage.includes("http://127.0.0.1:3080/knowledge-vault/api/image?path=07_Attachments%2F0701_Project%2Fdemo+image.png")) {
+  throw new Error("Obsidian image embed was not rewritten to the read-only Vault image API.");
+}
+const relativeImage = helpers.renderMarkdownSource(
+  "![diagram](../images/diagram.png)",
+  "03_Areas/0301_Project/Reader.md",
+);
+if (!relativeImage.includes("path=03_Areas%2Fimages%2Fdiagram.png")) {
+  throw new Error("Relative Markdown image path was not resolved from its document directory.");
+}
+const fencedImage = helpers.renderMarkdownSource(
+  "```md\n![[07_Attachments/demo.png]]\n```",
+  "03_Areas/0301_Project/Reader.md",
+);
+if (fencedImage.includes("/knowledge-vault/api/image")) {
+  throw new Error("Image syntax inside a fenced code block must remain literal.");
+}
 console.log("Dynamic graph simulation smoke passed.");
 '@
 $graphSimulationSmoke | & node - $clientPluginPath
@@ -317,12 +341,16 @@ try {
     )
     [System.IO.File]::WriteAllText(
         (Join-Path $initializedVault "01_Inbox\Stats Pending.md"),
-        "---`ntitle: Stats Pending`ntype: source`nstatus: needs-review`ntags: [stats-test]`n---`n# Stats Pending`n[[Missing Stats Target]]`n",
+        "---`ntitle: Stats Pending`ntype: source`nstatus: needs-review`ntags: [stats-test]`n---`n# Stats Pending`n[[Missing Stats Target]]`n![[07_Attachments/reader-image.png]]`n",
         [System.Text.UTF8Encoding]::new($false)
     )
     [System.IO.File]::WriteAllBytes(
         (Join-Path $initializedVault "07_Attachments\stats-attachment.bin"),
         [byte[]](1, 2, 3, 4)
+    )
+    [System.IO.File]::WriteAllBytes(
+        (Join-Path $initializedVault "07_Attachments\reader-image.png"),
+        [Convert]::FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
     )
 
     Write-Host "Starting an isolated DeepSeek Harness release test on port $port..."
@@ -406,6 +434,8 @@ try {
         'MarkdownText',
         'knowledge-vault:read-document',
         'expandMarkdownDocument',
+        'function renderMarkdownSource\(',
+        '/image',
         'function KnowledgeStatsView\(\)',
         'kv-stat-cards',
         '/stats',
@@ -553,6 +583,33 @@ try {
         -TimeoutSec 5
     if (-not $filePreview.previewable -or [string]::IsNullOrWhiteSpace([string]$filePreview.content)) {
         throw "The right-panel Vault browser API could not preview AGENTS.md."
+    }
+    $vaultImageResponse = Invoke-WebRequest `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/image?path=07_Attachments%2Freader-image.png" -f $port) `
+        -Method Get `
+        -UseBasicParsing `
+        -TimeoutSec 5
+    if (
+        $vaultImageResponse.StatusCode -ne 200 -or
+        $vaultImageResponse.Headers["Content-Type"] -ne "image/png" -or
+        $vaultImageResponse.Headers["Cross-Origin-Resource-Policy"] -ne "same-origin" -or
+        $vaultImageResponse.RawContentLength -ne (Get-Item -LiteralPath (Join-Path $initializedVault "07_Attachments\reader-image.png")).Length
+    ) {
+        throw "The read-only Vault image API did not return the expected image attachment."
+    }
+    $nonImageRejected = $false
+    try {
+        Invoke-WebRequest `
+            -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/image?path=AGENTS.md" -f $port) `
+            -Method Get `
+            -UseBasicParsing `
+            -TimeoutSec 5 | Out-Null
+    }
+    catch {
+        $nonImageRejected = $_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::UnsupportedMediaType
+    }
+    if (-not $nonImageRejected) {
+        throw "The Vault image API did not reject a non-image file."
     }
     $knowledgeGraph = Invoke-RestMethod `
         -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/graph?refresh=1" -f $port) `

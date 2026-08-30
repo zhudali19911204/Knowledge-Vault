@@ -71,6 +71,7 @@ window.__ModuleLoader__.load({
       .kv-markdown-document{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:15px;line-height:1.75;container-type:inline-size}
       .kv-markdown-document[data-compact="true"]{padding:12px 13px;font-size:13px;line-height:1.65}
       .kv-markdown-document[data-compact="false"]{width:min(920px,100%);margin:0 auto;padding:28px 34px 64px;font-size:16px;line-height:1.75}
+      .kv-markdown-document img{display:block;max-width:100%;height:auto;margin:16px auto;border-radius:8px}
       .kv-markdown-frontmatter{margin:0 0 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.55}
       .kv-markdown-frontmatter summary{cursor:pointer;padding:8px 10px;color:var(--dsw-alias-label-secondary);font-weight:600}
       .kv-markdown-frontmatter pre{max-height:240px;margin:0;padding:0 10px 10px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.55 var(--ds-font-family-code)}
@@ -266,8 +267,87 @@ window.__ModuleLoader__.load({
         : { frontmatter: "", body: text };
     }
 
+    function isSupportedImagePath(path) {
+      return /\.(?:avif|bmp|gif|ico|jpe?g|png|svg|tiff?|webp)$/i.test(String(path || ""));
+    }
+
+    function resolveVaultImagePath(documentPath, requestedPath, obsidianEmbed = false) {
+      let target = String(requestedPath || "").trim().replaceAll("\\", "/");
+      if (!target || target.includes("\0")) return "";
+      try {
+        target = decodeURIComponent(target);
+      } catch {
+        // Keep literal percent characters from valid Vault filenames.
+      }
+      target = target.split(/[?#]/, 1)[0].trim();
+      if (!target || !isSupportedImagePath(target)) return "";
+
+      const explicitRelative = target.startsWith("./") || target.startsWith("../");
+      const vaultRelative = target.startsWith("/") || (obsidianEmbed && target.includes("/") && !explicitRelative);
+      const parts = vaultRelative
+        ? []
+        : String(documentPath || "").replaceAll("\\", "/").split("/").slice(0, -1).filter(Boolean);
+      for (const part of target.replace(/^\/+/, "").split("/")) {
+        if (!part || part === ".") continue;
+        if (part === "..") {
+          if (parts.length === 0) return "";
+          parts.pop();
+        } else {
+          parts.push(part);
+        }
+      }
+      return parts.join("/");
+    }
+
+    function vaultImageUrl(path) {
+      const url = new URL(`${API_PREFIX}/image`, window.location.origin);
+      url.searchParams.set("path", path);
+      return url.href;
+    }
+
+    function markdownImageAlt(value) {
+      return String(value || "").replaceAll("\\", "\\\\").replaceAll("]", "\\]");
+    }
+
+    function rewriteMarkdownImageLine(line, documentPath) {
+      const standardImages = line.replace(
+        /!\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:(?:\s+)(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)/g,
+        (source, alt, angleTarget, plainTarget) => {
+          const target = angleTarget || plainTarget || "";
+          if (/^(?:[a-z][a-z\d+.-]*:|\/\/)/i.test(target) || target.startsWith(`${API_PREFIX}/image`)) {
+            return source;
+          }
+          const path = resolveVaultImagePath(documentPath, target, false);
+          return path ? `![${alt}](${vaultImageUrl(path)})` : source;
+        },
+      );
+      return standardImages.replace(/!\[\[([^\]\r\n]+)\]\]/g, (source, value) => {
+        const [target, ...options] = value.split("|");
+        const path = resolveVaultImagePath(documentPath, target, true);
+        if (!path) return source;
+        const option = options.join("|").trim();
+        const fallbackAlt = path.split("/").pop()?.replace(/\.[^.]+$/, "") || "图片";
+        const alt = option && !/^\d+(?:x\d+)?$/i.test(option) ? option : fallbackAlt;
+        return `![${markdownImageAlt(alt)}](${vaultImageUrl(path)})`;
+      });
+    }
+
+    function renderMarkdownSource(source, documentPath) {
+      let fence = "";
+      return String(source || "").replace(/[^\r\n]*(?:\r\n|\n|$)/g, (line) => {
+        const marker = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+        if (marker) {
+          if (!fence) fence = marker[1][0];
+          else if (marker[1][0] === fence) fence = "";
+          return line;
+        }
+        return fence ? line : rewriteMarkdownImageLine(line, documentPath);
+      });
+    }
+
     function MarkdownDocument({ document, compact = false }) {
       const { frontmatter, body } = splitMarkdownSource(document?.content || "");
+      const renderedBody = renderMarkdownSource(body, document?.path || "");
       return e("article", {
         className: "kv-markdown-document",
         "data-compact": compact ? "true" : "false",
@@ -276,9 +356,9 @@ window.__ModuleLoader__.load({
           e("summary", null, "文档属性"),
           e("pre", null, frontmatter),
         ) : null,
-        body.trim()
+        renderedBody.trim()
           ? e(MarkdownText, {
-            text: body,
+            text: renderedBody,
             codeLabels: { copyLabel: "复制", copiedLabel: "已复制" },
           })
           : e("div", { className: "kv-markdown-empty" }, "此 Markdown 文档没有正文。"),
