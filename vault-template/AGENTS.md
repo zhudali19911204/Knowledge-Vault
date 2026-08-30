@@ -157,7 +157,7 @@ python ".agents/scripts/knowledge_router.py" --apply
 4. 默认加载 1 篇主文档和最多 3 篇 `related` 文档，不无差别读取整个 Vault。
 5. `do_not_use_when` 命中时排除；优先使用 `evergreen` 或 `processed`、`retrieval_priority: high/normal` 的内容。
 6. 正式知识不足时才沿 `source_notes` 回看来源；`06_Archive` 和低优先级内容不作为首选。
-7. 回答列出实际使用的知识库文档，区分“知识库已有结论”和“AI 补充说明”。
+7. 回答列出实际使用的知识库文档，区分“知识库已有结论”和“AI 补充说明”。依据文档统一输出为 `[标题](<Vault 相对路径/文件名.md>)`；不要输出 `file:///`、磁盘绝对路径，或未用 `<...>` 包裹的含空格链接目标。
 8. 没有可靠匹配时明确说明，不伪造文档或链接。
 9. 检索到本地图片时应使用当前工具实际读取并展示；无法读取时如实说明。
 

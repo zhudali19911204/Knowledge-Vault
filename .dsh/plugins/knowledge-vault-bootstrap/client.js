@@ -348,12 +348,115 @@ window.__ModuleLoader__.load({
       });
     }
 
+    function resolveVaultDocumentPath(documentPath, requestedPath) {
+      let target = String(requestedPath || "").trim().replaceAll("\\", "/");
+      if (!target || target.includes("\0") || target.startsWith("#") || target.startsWith("//")) return "";
+
+      if (/^[a-z][a-z\d+.-]*:/i.test(target)) {
+        let url;
+        try {
+          url = new URL(target, window.location.origin);
+        } catch {
+          return "";
+        }
+        if (url.origin !== window.location.origin) return "";
+        target = url.pathname;
+      }
+
+      target = target.split(/[?#]/, 1)[0].trim();
+      try {
+        target = decodeURIComponent(target);
+      } catch {
+        // Keep literal percent characters from valid Vault filenames.
+      }
+      target = target.replaceAll("\\", "/");
+      if (!/\.md$/i.test(target)) return "";
+
+      const vaultRelative = target.startsWith("/");
+      const parts = vaultRelative
+        ? []
+        : String(documentPath || "").replaceAll("\\", "/").split("/").slice(0, -1).filter(Boolean);
+      for (const part of target.replace(/^\/+/, "").split("/")) {
+        if (!part || part === ".") continue;
+        if (part === "..") {
+          if (parts.length === 0) return "";
+          parts.pop();
+        } else {
+          parts.push(part);
+        }
+      }
+      return parts.join("/");
+    }
+
+    function findMalformedVaultMarkdownLinks(text, documentPath = "") {
+      const source = String(text || "");
+      const pattern = /\[([^\]\r\n]+)\]\(([^)\r\n]+?\.md(?:[?#][^)\r\n]*)?)\)/gi;
+      const matches = [];
+      let match;
+      while ((match = pattern.exec(source)) !== null) {
+        const requestedPath = match[2].trim();
+        if (requestedPath.startsWith("<") && requestedPath.endsWith(">")) continue;
+        const path = resolveVaultDocumentPath(documentPath, requestedPath);
+        if (!path) continue;
+        matches.push({
+          index: match.index,
+          length: match[0].length,
+          label: match[1],
+          requestedPath,
+          path,
+        });
+      }
+      return matches;
+    }
+
+    function upgradeMalformedVaultMarkdownLinks(root) {
+      if (!root) return 0;
+      const ownerDocument = root.ownerDocument || document;
+      const textNodes = [];
+      if (root.nodeType === 3) {
+        textNodes.push(root);
+      } else if (typeof ownerDocument.createTreeWalker === "function") {
+        const walker = ownerDocument.createTreeWalker(root, globalThis.NodeFilter?.SHOW_TEXT || 4);
+        let node;
+        while ((node = walker.nextNode())) textNodes.push(node);
+      }
+
+      let upgraded = 0;
+      for (const node of textNodes) {
+        const parent = node.parentElement;
+        if (!parent || !String(node.nodeValue || "").includes(".md)")) continue;
+        if (parent.closest("a,code,pre,script,style,textarea,[contenteditable=\"true\"]")) continue;
+        if (parent.closest('[data-streaming="true"]')) continue;
+        const documentPath = parent.closest("[data-vault-document-path]")?.getAttribute("data-vault-document-path") || "";
+        const links = findMalformedVaultMarkdownLinks(node.nodeValue, documentPath);
+        if (links.length === 0) continue;
+
+        const fragment = ownerDocument.createDocumentFragment();
+        let cursor = 0;
+        for (const link of links) {
+          if (link.index > cursor) fragment.appendChild(ownerDocument.createTextNode(node.nodeValue.slice(cursor, link.index)));
+          const anchor = ownerDocument.createElement("a");
+          anchor.textContent = link.label;
+          anchor.setAttribute("href", link.requestedPath);
+          anchor.setAttribute("data-knowledge-vault-path", link.path);
+          anchor.setAttribute("title", `在阅读器中打开：${link.path}`);
+          fragment.appendChild(anchor);
+          cursor = link.index + link.length;
+        }
+        if (cursor < node.nodeValue.length) fragment.appendChild(ownerDocument.createTextNode(node.nodeValue.slice(cursor)));
+        node.parentNode?.replaceChild(fragment, node);
+        upgraded += links.length;
+      }
+      return upgraded;
+    }
+
     function MarkdownDocument({ document, compact = false }) {
       const { frontmatter, body } = splitMarkdownSource(document?.content || "");
       const renderedBody = renderMarkdownSource(body, document?.path || "");
       return e("article", {
         className: "kv-markdown-document",
         "data-compact": compact ? "true" : "false",
+        "data-vault-document-path": document?.path || "",
       },
         frontmatter ? e("details", { className: "kv-markdown-frontmatter" },
           e("summary", null, "文档属性"),
@@ -553,12 +656,15 @@ window.__ModuleLoader__.load({
         return () => window.removeEventListener("knowledge-vault:changed", refreshActiveVault);
       }, []);
 
-      const selectFile = async (entry) => {
+      const selectFile = async (entry, options = {}) => {
         setSelected(entry);
         setPreview({ loading: true, name: entry.name, path: entry.path });
         try {
           const result = await getJson("file", entry.path);
           setPreview(result);
+          if (options.openReader && result.previewable && isMarkdownDocument(result)) {
+            expandMarkdownDocument(result);
+          }
         } catch (cause) {
           setPreview({
             name: entry.name,
@@ -569,14 +675,16 @@ window.__ModuleLoader__.load({
       };
 
       React.useEffect(() => {
-        const openGraphFile = (event) => {
+        const openVaultFile = (event) => {
           const path = event?.detail?.path;
           if (typeof path !== "string" || !path) return;
           const name = path.split("/").pop() || path;
-          void selectFile({ type: "file", path, name });
+          void selectFile({ type: "file", path, name }, {
+            openReader: event?.detail?.openReader === true,
+          });
         };
-        window.addEventListener("knowledge-vault:open-file", openGraphFile);
-        return () => window.removeEventListener("knowledge-vault:open-file", openGraphFile);
+        window.addEventListener("knowledge-vault:open-file", openVaultFile);
+        return () => window.removeEventListener("knowledge-vault:open-file", openVaultFile);
       }, []);
 
       let previewContent = e("div", { className: "kv-preview-empty" }, "选择 Markdown 或文本文件即可在这里预览。");
@@ -2094,6 +2202,48 @@ window.__ModuleLoader__.load({
     const inject = ["slots", "workspaces"];
     function apply(ctx) {
       const InitializationLauncher = createInitializationLauncher(ctx);
+      ctx.effect(() => {
+        if (typeof document === "undefined") return () => {};
+        const openVaultMarkdownLink = (event) => {
+          const anchor = event.target?.closest?.("a");
+          if (!anchor || anchor.hasAttribute("download")) return;
+          const documentPath = anchor.closest("[data-vault-document-path]")?.getAttribute("data-vault-document-path") || "";
+          const declaredPath = anchor.getAttribute("data-knowledge-vault-path");
+          const path = declaredPath
+            ? resolveVaultDocumentPath("", declaredPath)
+            : resolveVaultDocumentPath(documentPath, anchor.getAttribute("href"));
+          if (!path) return;
+          event.preventDefault();
+          event.stopPropagation();
+          window.dispatchEvent(new CustomEvent("knowledge-vault:open-file", {
+            detail: { path, openReader: true, source: "markdown-link" },
+          }));
+        };
+        const observedRoot = document.body || document.documentElement;
+        if (observedRoot) upgradeMalformedVaultMarkdownLinks(observedRoot);
+        const observer = observedRoot && typeof MutationObserver !== "undefined"
+          ? new MutationObserver((mutations) => {
+            for (const mutation of mutations) {
+              if (mutation.type === "characterData" || mutation.type === "attributes") {
+                upgradeMalformedVaultMarkdownLinks(mutation.target);
+              }
+              for (const node of mutation.addedNodes || []) upgradeMalformedVaultMarkdownLinks(node);
+            }
+          })
+          : null;
+        observer?.observe(observedRoot, {
+          attributes: true,
+          attributeFilter: ["data-streaming"],
+          characterData: true,
+          childList: true,
+          subtree: true,
+        });
+        document.addEventListener("click", openVaultMarkdownLink, true);
+        return () => {
+          observer?.disconnect();
+          document.removeEventListener("click", openVaultMarkdownLink, true);
+        };
+      }, "knowledge-vault-bootstrap: open Vault Markdown links in reader");
       ctx.effect(() => {
         if (typeof document === "undefined") return () => {};
         const originalTitle = document.title;

@@ -118,13 +118,36 @@ source = source.replace(marker, `
       reheatGraphSimulation,
       tickGraphSimulation,
       renderMarkdownSource,
+      resolveVaultDocumentPath,
+      findMalformedVaultMarkdownLinks,
+      upgradeMalformedVaultMarkdownLinks,
     };
 ${marker}`);
 let plugin;
 const React = { createElement() {} };
+let capturedDocumentClick;
+const dispatchedWindowEvents = [];
+const documentStub = {
+  addEventListener(type, handler, capture) {
+    if (type === "click" && capture === true) capturedDocumentClick = handler;
+  },
+  removeEventListener(type, handler, capture) {
+    if (type === "click" && capture === true && capturedDocumentClick === handler) capturedDocumentClick = undefined;
+  },
+};
+class TestCustomEvent {
+  constructor(type, options = {}) {
+    this.type = type;
+    this.detail = options.detail;
+  }
+}
 const sandbox = {
+  CustomEvent: TestCustomEvent,
   window: {
     location: { origin: "http://127.0.0.1:3080" },
+    dispatchEvent(event) {
+      dispatchedWindowEvents.push(event);
+    },
     __ModuleLoader__: {
       load(definition) {
         plugin = definition.factory((name) => name === "react" ? React : {});
@@ -134,6 +157,7 @@ const sandbox = {
   URL,
 };
 vm.runInNewContext(source, sandbox, { filename: clientPath });
+sandbox.document = documentStub;
 const helpers = plugin?.__graphTest;
 if (!helpers) throw new Error("Graph simulation helpers were not loaded.");
 const nodes = [
@@ -195,6 +219,119 @@ const fencedImage = helpers.renderMarkdownSource(
 if (fencedImage.includes("/knowledge-vault/api/image")) {
   throw new Error("Image syntax inside a fenced code block must remain literal.");
 }
+const chatDocument = helpers.resolveVaultDocumentPath(
+  "",
+  "02_FICO/0203_Transfer%20Price/%E4%BE%9D%E6%8D%AE%E6%96%87%E6%A1%A3.md#section",
+);
+if (chatDocument !== "02_FICO/0203_Transfer Price/\u4f9d\u636e\u6587\u6863.md") {
+  throw new Error(`Chat Vault Markdown path was not decoded from the Vault root: ${chatDocument}`);
+}
+const readerDocument = helpers.resolveVaultDocumentPath(
+  "02_FICO/0209_Other/020901_Index/Current.md",
+  "../0203_Transfer Price/Rule.md",
+);
+if (readerDocument !== "02_FICO/0209_Other/0203_Transfer Price/Rule.md") {
+  throw new Error(`Reader-relative Markdown path was not normalized safely: ${readerDocument}`);
+}
+if (helpers.resolveVaultDocumentPath("", "https://example.com/External.md") !== "") {
+  throw new Error("External Markdown URLs must not be intercepted by the Vault reader.");
+}
+if (helpers.resolveVaultDocumentPath("01_Inbox/Current.md", "../../outside.md") !== "") {
+  throw new Error("A Markdown path that escapes the Vault root must be rejected.");
+}
+if (helpers.resolveVaultDocumentPath("", "07_Attachments/image.png") !== "") {
+  throw new Error("Non-Markdown links must not be intercepted by the Vault reader.");
+}
+const malformedLinks = helpers.findMalformedVaultMarkdownLinks(
+  "[M100.2 rule](02_FICO/0203_Transfer Price/2026 Rule.md)",
+);
+if (malformedLinks.length !== 1 || malformedLinks[0].path !== "02_FICO/0203_Transfer Price/2026 Rule.md") {
+  throw new Error(`A historical Markdown link containing spaces was not recovered: ${JSON.stringify(malformedLinks)}`);
+}
+if (helpers.findMalformedVaultMarkdownLinks("[External](https://example.com/External Rule.md)").length !== 0) {
+  throw new Error("A malformed external Markdown URL must not be upgraded to a Vault link.");
+}
+let replacedFragment;
+const upgradedAnchors = [];
+const malformedTextNode = {
+  nodeType: 3,
+  nodeValue: "Source: [M100.2 rule](02_FICO/0203_Transfer Price/2026 Rule.md)",
+};
+const malformedParent = {
+  closest() { return null; },
+  replaceChild(fragment, node) {
+    if (node !== malformedTextNode) throw new Error("The wrong historical text node was replaced.");
+    replacedFragment = fragment;
+  },
+};
+malformedTextNode.parentElement = malformedParent;
+malformedTextNode.parentNode = malformedParent;
+const malformedDocument = {
+  createTreeWalker() {
+    let yielded = false;
+    return { nextNode() { return yielded ? null : (yielded = true, malformedTextNode); } };
+  },
+  createDocumentFragment() {
+    return { children: [], appendChild(child) { this.children.push(child); } };
+  },
+  createTextNode(value) { return { nodeType: 3, nodeValue: value }; },
+  createElement(tagName) {
+    const attributes = new Map();
+    const element = {
+      tagName,
+      textContent: "",
+      setAttribute(name, value) { attributes.set(name, value); },
+      getAttribute(name) { return attributes.get(name) ?? null; },
+    };
+    upgradedAnchors.push(element);
+    return element;
+  },
+};
+const malformedRoot = { nodeType: 1, ownerDocument: malformedDocument };
+const upgradedCount = helpers.upgradeMalformedVaultMarkdownLinks(malformedRoot);
+if (upgradedCount !== 1 || !replacedFragment || upgradedAnchors.length !== 1) {
+  throw new Error("Historical Markdown text was not upgraded into a clickable anchor.");
+}
+if (upgradedAnchors[0].getAttribute("data-knowledge-vault-path") !== "02_FICO/0203_Transfer Price/2026 Rule.md") {
+  throw new Error("The upgraded historical link did not keep its resolved Vault path.");
+}
+const effectCleanups = [];
+plugin.apply({
+  effect(callback, description) {
+    if (description === "knowledge-vault-bootstrap: open Vault Markdown links in reader") {
+      effectCleanups.push(callback());
+    }
+  },
+  slots: { inject() {} },
+  workspaces: {},
+});
+if (typeof capturedDocumentClick !== "function") {
+  throw new Error("Vault Markdown click interception was not registered in capture phase.");
+}
+const chatAnchor = {
+  getAttribute(name) {
+    return name === "href" ? "02_FICO/0203_Transfer%20Price/Rule.md" : null;
+  },
+  hasAttribute() { return false; },
+  closest(selector) {
+    return selector === "a" ? this : null;
+  },
+};
+let prevented = false;
+let stopped = false;
+capturedDocumentClick({
+  target: chatAnchor,
+  preventDefault() { prevented = true; },
+  stopPropagation() { stopped = true; },
+});
+const openEvent = dispatchedWindowEvents.at(-1);
+if (!prevented || !stopped || openEvent?.type !== "knowledge-vault:open-file") {
+  throw new Error("Vault Markdown click did not suppress navigation and dispatch an open-file event.");
+}
+if (openEvent.detail?.path !== "02_FICO/0203_Transfer Price/Rule.md" || openEvent.detail?.openReader !== true) {
+  throw new Error(`Vault Markdown click dispatched the wrong reader request: ${JSON.stringify(openEvent?.detail)}`);
+}
+effectCleanups.forEach((cleanup) => cleanup?.());
 console.log("Dynamic graph simulation smoke passed.");
 '@
 $graphSimulationSmoke | & node - $clientPluginPath
@@ -456,6 +593,12 @@ try {
         'knowledge-vault:read-document',
         'expandMarkdownDocument',
         'function renderMarkdownSource\(',
+        'function resolveVaultDocumentPath\(',
+        'function findMalformedVaultMarkdownLinks\(',
+        'function upgradeMalformedVaultMarkdownLinks\(',
+        'data-vault-document-path',
+        'data-knowledge-vault-path',
+        'source: "markdown-link"',
         '/image',
         'function KnowledgeStatsView\(\)',
         'kv-stat-cards',
