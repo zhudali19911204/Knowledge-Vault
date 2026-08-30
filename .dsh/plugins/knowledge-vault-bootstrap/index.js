@@ -226,6 +226,23 @@ async function persistSelectedVault(productConfig, vaultRoot) {
   await writeFile(productConfig, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
+async function removeMissingWorkspaceRegistrations(ctx, activeVaultRoot) {
+  for (const workspace of ctx.workspaceRegistry.list()) {
+    if (workspace.path === activeVaultRoot) continue;
+    let status;
+    try {
+      status = await workspace.status();
+    } catch (error) {
+      ctx.logger.warn(`unable to check workspace path ${workspace.path}: ${error?.message || error}`);
+      continue;
+    }
+    if (status !== "missing-dir") continue;
+    if (await ctx.workspaceRegistry.delete(workspace.id)) {
+      ctx.logger.warn(`removed unavailable workspace registration: ${workspace.path}`);
+    }
+  }
+}
+
 async function initializeVault(destination) {
   if (typeof destination !== "string" || destination.trim() === "" || destination.includes("\0")) {
     throw Object.assign(new Error("请选择一个有效的知识库目录。"), { statusCode: 400 });
@@ -1182,6 +1199,7 @@ async function apply(ctx) {
   const graphWorker = await readFile(GRAPH_WORKER_SOURCE);
 
   await ctx.effect(async () => {
+    await removeMissingWorkspaceRegistrations(ctx, state.vaultRoot);
     let workspace = await ctx.workspaceRegistry.resolveByPath(state.vaultRoot);
     const created = workspace === undefined;
 

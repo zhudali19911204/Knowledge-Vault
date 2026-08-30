@@ -238,11 +238,19 @@ try {
     $smokeReadyFile = Join-Path $stagingRoot "smoke-ready.json"
     $smokeStdout = Join-Path $stagingRoot "smoke-stdout.log"
     $smokeStderr = Join-Path $stagingRoot "smoke-stderr.log"
+    $smokeDeletedVault = Join-Path $stagingRoot "deleted-vault"
+    $expectedFallbackVault = Join-Path $unpackedRoot "resources\product\vault-template"
     $previousSmokeDataRoot = [Environment]::GetEnvironmentVariable("KV_DESKTOP_DATA_ROOT", "Process")
     $previousSmokeReadyFile = [Environment]::GetEnvironmentVariable("KV_DESKTOP_READY_FILE", "Process")
     $previousElectronRunAsNode = [Environment]::GetEnvironmentVariable("ELECTRON_RUN_AS_NODE", "Process")
     $previousElectronLogging = [Environment]::GetEnvironmentVariable("ELECTRON_ENABLE_LOGGING", "Process")
     try {
+        New-Item -ItemType Directory -Force -Path $smokeDataRoot | Out-Null
+        [System.IO.File]::WriteAllText(
+            (Join-Path $smokeDataRoot "product.json"),
+            (@{ vaultRoot = $smokeDeletedVault } | ConvertTo-Json) + [Environment]::NewLine,
+            (New-Object System.Text.UTF8Encoding($false))
+        )
         $env:KV_DESKTOP_DATA_ROOT = $smokeDataRoot
         $env:KV_DESKTOP_READY_FILE = $smokeReadyFile
         $env:ELECTRON_ENABLE_LOGGING = "1"
@@ -273,6 +281,15 @@ try {
             $stderrText = if (Test-Path -LiteralPath $smokeStderr) { Get-Content -Raw -LiteralPath $smokeStderr } else { "" }
             $exitCodeText = if ($null -eq $reportedExitCode) { "unavailable" } else { [string]$reportedExitCode }
             throw "Packaged desktop smoke test failed with exit code $exitCodeText.`nResult:`n$($smokeResult | ConvertTo-Json -Depth 5)`nDesktop log:`n$logText`nstdout:`n$stdoutText`nstderr:`n$stderrText"
+        }
+        if (-not [string]::Equals([string]$smokeResult.vaultRoot, $expectedFallbackVault, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Packaged desktop did not fall back to its bundled template after the selected Vault disappeared."
+        }
+        if (
+            -not [string]::Equals([string]$smokeResult.recovery.reason, "missing-vault", [System.StringComparison]::Ordinal) -or
+            -not [string]::Equals([string]$smokeResult.recovery.requested, $smokeDeletedVault, [System.StringComparison]::OrdinalIgnoreCase)
+        ) {
+            throw "Packaged desktop did not report the deleted Vault recovery result."
         }
     }
     finally {

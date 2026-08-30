@@ -5,6 +5,7 @@ const fsp = require("node:fs/promises");
 const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
+const { resolveSelectedVault } = require("./vault-selection.cjs");
 
 const isSmokeTest = process.argv.includes("--smoke-test");
 const localAppData = process.env.LOCALAPPDATA || app.getPath("appData");
@@ -48,22 +49,6 @@ async function ensureFile(filePath, description) {
 async function ensureDirectory(directory, description) {
   const details = await fsp.stat(directory).catch(() => undefined);
   if (!details?.isDirectory()) throw new Error(`缺少${description}：${directory}`);
-}
-
-async function readSelectedVault(root) {
-  const templateRoot = path.join(root, "vault-template");
-  const configPath = path.join(dataRoot, "product.json");
-  let selected = templateRoot;
-  try {
-    const config = JSON.parse(await fsp.readFile(configPath, "utf8"));
-    if (typeof config.vaultRoot === "string" && config.vaultRoot.trim()) selected = path.resolve(config.vaultRoot);
-  } catch (error) {
-    if (error?.code !== "ENOENT") throw new Error(`已保存的知识库配置无效：${configPath}`);
-  }
-  await ensureDirectory(selected, "知识库目录");
-  await ensureFile(path.join(selected, "AGENTS.md"), "知识库 AGENTS.md");
-  await ensureDirectory(path.join(selected, "01_Inbox"), "知识库 01_Inbox 目录");
-  return { selected, templateRoot, configPath };
 }
 
 async function prepareRuntimePlugin(root) {
@@ -129,7 +114,7 @@ async function startBackend() {
   const root = productRoot();
   const node = runtimeNode();
   const dshBin = path.join(root, "node_modules", "@deepseek-ai", "dsh", "lib", "bin.js");
-  const { selected: vaultRoot, templateRoot, configPath } = await readSelectedVault(root);
+  const { selected: vaultRoot, templateRoot, configPath, recovery } = await resolveSelectedVault(root, dataRoot);
   if (app.isPackaged) await ensureFile(node, "桌面版 Node 运行时");
   await ensureFile(dshBin, "固定版 DeepSeek Harness");
   await prepareRuntimePlugin(root);
@@ -170,7 +155,21 @@ async function startBackend() {
   });
   await waitForBackend(url);
   activeOrigin = url;
-  return { url, vaultRoot, logPath };
+  return { url, vaultRoot, logPath, recovery };
+}
+
+function recoveryNotice(recovery) {
+  if (!recovery) return undefined;
+  if (recovery.reason === "invalid-config") {
+    return `本机保存的知识库路径配置无法读取：\n${recovery.requested}`;
+  }
+  if (recovery.reason === "legacy-product-root") {
+    return "检测到旧版应用目录工作区配置。";
+  }
+  if (recovery.reason === "invalid-vault") {
+    return `上次使用的目录已不是有效的 Knowledge Vault：\n${recovery.requested}`;
+  }
+  return `上次使用的知识库已经不存在：\n${recovery.requested}`;
 }
 
 function closeLog() {
@@ -270,11 +269,22 @@ if (!hasLock) {
     try {
       const result = await startBackend();
       await mainWindow.loadURL(result.url);
-      await writeSmokeResult({ ready: true, url: result.url, vaultRoot: result.vaultRoot });
+      await writeSmokeResult({ ready: true, url: result.url, vaultRoot: result.vaultRoot, recovery: result.recovery });
       if (isSmokeTest) {
         quitting = true;
         await stopBackend();
         app.exit(0);
+      } else {
+        const detail = recoveryNotice(result.recovery);
+        if (detail) {
+          void dialog.showMessageBox(mainWindow, {
+            type: "warning",
+            title: "需要重新选择知识库",
+            message: "已安全打开内置知识库模板",
+            detail: `${detail}\n\n请使用左侧“初始化知识库”或“选择知识库”重新绑定。模型设置和会话数据不会被删除。`,
+            buttons: ["知道了"],
+          });
+        }
       }
     } catch (error) {
       const message = `${error?.message || error}\n\n${recentOutput.slice(-20).join("\n")}`.trim();

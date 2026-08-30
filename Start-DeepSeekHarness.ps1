@@ -28,7 +28,8 @@ if ([string]::IsNullOrWhiteSpace($DataRoot)) {
 }
 $DataRoot = [System.IO.Path]::GetFullPath($DataRoot)
 
-if ([string]::IsNullOrWhiteSpace($VaultRoot)) {
+$vaultRootWasExplicit = -not [string]::IsNullOrWhiteSpace($VaultRoot)
+if (-not $vaultRootWasExplicit) {
     $productConfigPath = Join-Path $DataRoot "product.json"
     if (Test-Path -LiteralPath $productConfigPath) {
         try {
@@ -36,7 +37,8 @@ if ([string]::IsNullOrWhiteSpace($VaultRoot)) {
             $VaultRoot = [string]$productConfig.vaultRoot
         }
         catch {
-            throw "The saved Knowledge Vault configuration is invalid: $productConfigPath"
+            Write-Warning "The saved Knowledge Vault configuration is invalid. Falling back to the bundled template: $productConfigPath"
+            $VaultRoot = $null
         }
     }
     if ([string]::IsNullOrWhiteSpace($VaultRoot)) {
@@ -53,12 +55,26 @@ if ([string]::IsNullOrWhiteSpace($VaultRoot)) {
 }
 $vaultRoot = [System.IO.Path]::GetFullPath($VaultRoot)
 
-if (-not (Test-Path -LiteralPath $vaultRoot -PathType Container)) {
-    throw "The configured Knowledge Vault does not exist: $vaultRoot"
+$vaultIsInitialized = Test-Path -LiteralPath $vaultRoot -PathType Container
+if ($vaultIsInitialized) {
+    foreach ($requiredVaultEntry in @("AGENTS.md", "01_Inbox")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $vaultRoot $requiredVaultEntry))) {
+            $vaultIsInitialized = $false
+            break
+        }
+    }
+}
+if (-not $vaultIsInitialized) {
+    if ($vaultRootWasExplicit) {
+        throw "The requested directory does not exist or is not an initialized Knowledge Vault: $vaultRoot"
+    }
+    Write-Warning "The previously selected Knowledge Vault is unavailable: $vaultRoot"
+    Write-Warning "Falling back to the bundled template. Use 'Initialize Knowledge Base' or 'Select Knowledge Base' to bind another Vault."
+    $vaultRoot = $vaultTemplateRoot
 }
 foreach ($requiredVaultEntry in @("AGENTS.md", "01_Inbox")) {
     if (-not (Test-Path -LiteralPath (Join-Path $vaultRoot $requiredVaultEntry))) {
-        throw "The configured directory is not an initialized Knowledge Vault: $vaultRoot"
+        throw "The bundled Knowledge Vault template is incomplete: $vaultRoot"
     }
 }
 

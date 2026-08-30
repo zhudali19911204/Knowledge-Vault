@@ -19,6 +19,8 @@ $brandLogoPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\
 $faviconPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\knowledge-vault-favicon.png"
 $manifestPath = Join-Path $productRoot "package.json"
 $desktopMainPath = Join-Path $productRoot "desktop\main.cjs"
+$desktopVaultSelectionPath = Join-Path $productRoot "desktop\vault-selection.cjs"
+$desktopVaultSelectionTestPath = Join-Path $productRoot "desktop\vault-selection.test.cjs"
 $desktopBuilderConfigPath = Join-Path $productRoot "desktop\builder-config.cjs"
 $desktopManifestPath = Join-Path $productRoot "desktop\package.json"
 $desktopLoadingPath = Join-Path $productRoot "desktop\loading.html"
@@ -35,6 +37,8 @@ foreach ($path in @(
     $faviconPath,
     $manifestPath,
     $desktopMainPath,
+    $desktopVaultSelectionPath,
+    $desktopVaultSelectionTestPath,
     $desktopBuilderConfigPath,
     $desktopManifestPath,
     $desktopLoadingPath,
@@ -82,6 +86,14 @@ if ($LASTEXITCODE -ne 0) {
 & node --check $desktopMainPath
 if ($LASTEXITCODE -ne 0) {
     throw "Knowledge Vault desktop shell syntax validation failed with exit code $LASTEXITCODE."
+}
+& node --check $desktopVaultSelectionPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge Vault desktop Vault selection validation failed with exit code $LASTEXITCODE."
+}
+& node $desktopVaultSelectionTestPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge Vault desktop Vault recovery test failed with exit code $LASTEXITCODE."
 }
 & node --check $desktopBuilderConfigPath
 if ($LASTEXITCODE -ne 0) {

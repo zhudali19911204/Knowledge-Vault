@@ -24,6 +24,7 @@ module.exports = {
   },
   files: [
     "main.cjs",
+    "vault-selection.cjs",
     "loading.html",
     "package.json",
   ],
