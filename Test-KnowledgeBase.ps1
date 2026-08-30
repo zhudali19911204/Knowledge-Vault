@@ -169,6 +169,13 @@ const relativeImage = helpers.renderMarkdownSource(
 if (!relativeImage.includes("path=03_Areas%2Fimages%2Fdiagram.png")) {
   throw new Error("Relative Markdown image path was not resolved from its document directory.");
 }
+const vaultAttachment = helpers.renderMarkdownSource(
+  "![contour](07_Attachments/0701_Course/slide11_contour.png)",
+  "01_Inbox/Reader.md",
+);
+if (!vaultAttachment.includes("path=07_Attachments%2F0701_Course%2Fslide11_contour.png")) {
+  throw new Error("Obsidian-style Vault attachment path was incorrectly resolved relative to the document.");
+}
 const fencedImage = helpers.renderMarkdownSource(
   "```md\n![[07_Attachments/demo.png]]\n```",
   "03_Areas/0301_Project/Reader.md",

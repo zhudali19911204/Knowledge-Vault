@@ -284,7 +284,9 @@ window.__ModuleLoader__.load({
       if (!target || !isSupportedImagePath(target)) return "";
 
       const explicitRelative = target.startsWith("./") || target.startsWith("../");
-      const vaultRelative = target.startsWith("/") || (obsidianEmbed && target.includes("/") && !explicitRelative);
+      const vaultRelative = target.startsWith("/") ||
+        target.startsWith("07_Attachments/") ||
+        (obsidianEmbed && target.includes("/") && !explicitRelative);
       const parts = vaultRelative
         ? []
         : String(documentPath || "").replaceAll("\\", "/").split("/").slice(0, -1).filter(Boolean);
