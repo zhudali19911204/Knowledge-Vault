@@ -76,6 +76,8 @@ window.__ModuleLoader__.load({
       .kv-markdown-frontmatter{margin:0 0 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.55}
       .kv-markdown-frontmatter summary{cursor:pointer;padding:8px 10px;color:var(--dsw-alias-label-secondary);font-weight:600}
       .kv-markdown-frontmatter pre{max-height:240px;margin:0;padding:0 10px 10px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.55 var(--ds-font-family-code)}
+      .kv-markdown-frontmatter pre a{color:var(--dsw-alias-label-primary);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px;cursor:pointer}
+      .kv-markdown-frontmatter pre a:hover{color:#d85f16}
       .kv-markdown-empty{color:var(--dsw-alias-label-tertiary);font-style:italic}
       .kv-reader{height:100%;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family)}
       .kv-reader-header{flex:none;min-height:58px;box-sizing:border-box;display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}
@@ -344,7 +346,8 @@ window.__ModuleLoader__.load({
           else if (marker[1][0] === fence) fence = "";
           return line;
         }
-        return fence ? line : rewriteMarkdownImageLine(line, documentPath);
+        if (fence) return line;
+        return rewriteObsidianDocumentLinkLine(rewriteMarkdownImageLine(line, documentPath), documentPath);
       });
     }
 
@@ -388,6 +391,99 @@ window.__ModuleLoader__.load({
       return parts.join("/");
     }
 
+    function normalizeObsidianDocumentLink(documentPath, value) {
+      const [rawTarget, ...aliasParts] = String(value || "").split("|");
+      const target = rawTarget.trim().replaceAll("\\", "/");
+      if (!target || target.includes("\0") || target.startsWith("#") || target.startsWith("//")) return null;
+      if (/^[a-z][a-z\d+.-]*:/i.test(target)) return null;
+
+      const referenceIndex = target.search(/[#^]/);
+      const targetPath = (referenceIndex < 0 ? target : target.slice(0, referenceIndex)).trim();
+      const reference = referenceIndex < 0 ? "" : target.slice(referenceIndex);
+      if (!targetPath || /\.(?:png|jpe?g|gif|webp|avif|svg|bmp|pdf|docx?|xlsx?|pptx?|csv|tsv|zip|7z|rar|mp3|wav|m4a|mp4|mov|avi)$/i.test(targetPath)) {
+        return null;
+      }
+
+      const markdownPath = /\.md$/i.test(targetPath) ? targetPath : `${targetPath}.md`;
+      const explicitRelative = markdownPath.startsWith("./") || markdownPath.startsWith("../");
+      const vaultRelative = markdownPath.startsWith("/") || (!explicitRelative && markdownPath.includes("/"));
+      const requestedPath = `${vaultRelative ? `/${markdownPath.replace(/^\/+/, "")}` : markdownPath}${reference}`;
+      const path = resolveVaultDocumentPath(documentPath, requestedPath);
+      if (!path) return null;
+
+      const fallbackLabel = targetPath.split("/").pop()?.replace(/\.md$/i, "") || targetPath;
+      const label = aliasParts.join("|").trim() || fallbackLabel;
+      return { label, requestedPath, path };
+    }
+
+    function markdownLinkLabel(value) {
+      return String(value || "").replaceAll("\\", "\\\\").replaceAll("[", "\\[").replaceAll("]", "\\]");
+    }
+
+    function rewriteObsidianDocumentLinkLine(line, documentPath) {
+      return String(line || "").replace(/(^|[^!])\[\[([^\]\r\n]+)\]\]/g, (source, prefix, value) => {
+        const link = normalizeObsidianDocumentLink(documentPath, value);
+        if (!link) return source;
+        const destination = link.requestedPath.replaceAll("<", "%3C").replaceAll(">", "%3E");
+        return `${prefix}[${markdownLinkLabel(link.label)}](<${destination}>)`;
+      });
+    }
+
+    function findObsidianVaultDocumentLinks(text, documentPath = "") {
+      const source = String(text || "");
+      const pattern = /(^|[^!])\[\[([^\]\r\n]+)\]\]/g;
+      const matches = [];
+      let match;
+      while ((match = pattern.exec(source)) !== null) {
+        const link = normalizeObsidianDocumentLink(documentPath, match[2]);
+        if (!link) continue;
+        matches.push({
+          index: match.index + match[1].length,
+          length: match[0].length - match[1].length,
+          ...link,
+        });
+      }
+      return matches;
+    }
+
+    function tokenizeFrontmatterRelatedLinks(frontmatter, documentPath = "") {
+      const lines = String(frontmatter || "").split(/\r?\n/);
+      const tokens = [];
+      let activeProperty = "";
+      lines.forEach((line, lineIndex) => {
+        const property = line.match(/^([A-Za-z_][A-Za-z\d_-]*):(?:\s|$)/);
+        if (property) activeProperty = property[1];
+        const links = activeProperty === "related"
+          ? findObsidianVaultDocumentLinks(line, documentPath)
+          : [];
+        if (links.length === 0) {
+          tokens.push({ kind: "text", text: line });
+        } else {
+          let cursor = 0;
+          links.forEach((link) => {
+            if (link.index > cursor) tokens.push({ kind: "text", text: line.slice(cursor, link.index) });
+            tokens.push({ kind: "link", ...link });
+            cursor = link.index + link.length;
+          });
+          if (cursor < line.length) tokens.push({ kind: "text", text: line.slice(cursor) });
+        }
+        if (lineIndex < lines.length - 1) tokens.push({ kind: "text", text: "\n" });
+      });
+      return tokens;
+    }
+
+    function FrontmatterDocumentProperties({ frontmatter, documentPath }) {
+      const tokens = tokenizeFrontmatterRelatedLinks(frontmatter, documentPath);
+      return e("pre", null, ...tokens.map((token, index) => token.kind === "link"
+        ? e("a", {
+          key: `related-${index}-${token.path}`,
+          href: token.requestedPath,
+          "data-knowledge-vault-path": token.path,
+          title: `在阅读器中打开：${token.path}`,
+        }, token.label)
+        : token.text));
+    }
+
     function findMalformedVaultMarkdownLinks(text, documentPath = "") {
       const source = String(text || "");
       const pattern = /\[([^\]\r\n]+)\]\(([^)\r\n]+?\.md(?:[?#][^)\r\n]*)?)\)/gi;
@@ -424,17 +520,21 @@ window.__ModuleLoader__.load({
       let upgraded = 0;
       for (const node of textNodes) {
         const parent = node.parentElement;
-        if (!parent || !String(node.nodeValue || "").includes(".md)")) continue;
+        const text = String(node.nodeValue || "");
+        if (!parent || (!text.includes(".md)") && !text.includes("[["))) continue;
         if (parent.closest("a,code,pre,script,style,textarea,[contenteditable=\"true\"]")) continue;
         if (parent.closest('[data-streaming="true"]')) continue;
         const documentPath = parent.closest("[data-vault-document-path]")?.getAttribute("data-vault-document-path") || "";
-        const links = findMalformedVaultMarkdownLinks(node.nodeValue, documentPath);
+        const links = [
+          ...findMalformedVaultMarkdownLinks(text, documentPath),
+          ...findObsidianVaultDocumentLinks(text, documentPath),
+        ].sort((left, right) => left.index - right.index);
         if (links.length === 0) continue;
 
         const fragment = ownerDocument.createDocumentFragment();
         let cursor = 0;
         for (const link of links) {
-          if (link.index > cursor) fragment.appendChild(ownerDocument.createTextNode(node.nodeValue.slice(cursor, link.index)));
+          if (link.index > cursor) fragment.appendChild(ownerDocument.createTextNode(text.slice(cursor, link.index)));
           const anchor = ownerDocument.createElement("a");
           anchor.textContent = link.label;
           anchor.setAttribute("href", link.requestedPath);
@@ -443,7 +543,7 @@ window.__ModuleLoader__.load({
           fragment.appendChild(anchor);
           cursor = link.index + link.length;
         }
-        if (cursor < node.nodeValue.length) fragment.appendChild(ownerDocument.createTextNode(node.nodeValue.slice(cursor)));
+        if (cursor < text.length) fragment.appendChild(ownerDocument.createTextNode(text.slice(cursor)));
         node.parentNode?.replaceChild(fragment, node);
         upgraded += links.length;
       }
@@ -460,7 +560,10 @@ window.__ModuleLoader__.load({
       },
         frontmatter ? e("details", { className: "kv-markdown-frontmatter" },
           e("summary", null, "文档属性"),
-          e("pre", null, frontmatter),
+          e(FrontmatterDocumentProperties, {
+            frontmatter,
+            documentPath: document?.path || "",
+          }),
         ) : null,
         renderedBody.trim()
           ? e(MarkdownText, {

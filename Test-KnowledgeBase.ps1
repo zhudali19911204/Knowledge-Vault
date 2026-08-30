@@ -119,6 +119,9 @@ source = source.replace(marker, `
       tickGraphSimulation,
       renderMarkdownSource,
       resolveVaultDocumentPath,
+      normalizeObsidianDocumentLink,
+      findObsidianVaultDocumentLinks,
+      tokenizeFrontmatterRelatedLinks,
       findMalformedVaultMarkdownLinks,
       upgradeMalformedVaultMarkdownLinks,
     };
@@ -219,6 +222,58 @@ const fencedImage = helpers.renderMarkdownSource(
 if (fencedImage.includes("/knowledge-vault/api/image")) {
   throw new Error("Image syntax inside a fenced code block must remain literal.");
 }
+const obsidianRelations = helpers.renderMarkdownSource(
+  "Source: [[06_Archive/Sources/AI Dialogues/0601_2026/2026-08-21 1529 - M100.2 Rule|M100.2 source]]\nIndex: [[02_FICO/0203_Transfer Price/_Index|FICO Transfer Price]]",
+  "02_FICO/0203_Transfer Price/Current.md",
+);
+if (!obsidianRelations.includes("[M100.2 source](</06_Archive/Sources/AI Dialogues/0601_2026/2026-08-21 1529 - M100.2 Rule.md>)")) {
+  throw new Error(`An Obsidian source link was not rewritten for the built-in reader: ${obsidianRelations}`);
+}
+if (!obsidianRelations.includes("[FICO Transfer Price](</02_FICO/0203_Transfer Price/_Index.md>)")) {
+  throw new Error(`An Obsidian index link was not rewritten for the built-in reader: ${obsidianRelations}`);
+}
+const relativeRelation = helpers.normalizeObsidianDocumentLink(
+  "02_FICO/0203_Transfer Price/Current.md",
+  "./Related Rule|Related",
+);
+if (relativeRelation?.path !== "02_FICO/0203_Transfer Price/Related Rule.md") {
+  throw new Error(`A relative Obsidian relationship did not resolve from the current document: ${JSON.stringify(relativeRelation)}`);
+}
+if (helpers.renderMarkdownSource("Attachment: ![[07_Attachments/manual.pdf]]", "02_FICO/Current.md").includes("[manual]")) {
+  throw new Error("A non-Markdown Obsidian attachment must not be rewritten as a document link.");
+}
+const fencedRelation = helpers.renderMarkdownSource(
+  "```md\n[[02_FICO/0203_Transfer Price/_Index|Index]]\n```",
+  "02_FICO/Current.md",
+);
+if (!fencedRelation.includes("[[02_FICO/0203_Transfer Price/_Index|Index]]")) {
+  throw new Error("Obsidian document link syntax inside a fenced code block must remain literal.");
+}
+const frontmatterTokens = helpers.tokenizeFrontmatterRelatedLinks(
+  [
+    "source_notes:",
+    '  - "[[06_Archive/Sources/Dialogue|Source must remain literal]]"',
+    "related:",
+    '  - "[[03_Areas/0302_RAG/_Index|RAG]]"',
+    '  - "[[05_Skills/0502_Markdown/_Index|Markdown]]"',
+    "routed_at: 2026-08-21T12:45:19+08:00",
+  ].join("\n"),
+  "05_Skills/0501_Knowledge Management/Current.md",
+);
+const frontmatterLinks = frontmatterTokens.filter((token) => token.kind === "link");
+if (frontmatterLinks.length !== 2) {
+  throw new Error(`Only frontmatter related entries should become links: ${JSON.stringify(frontmatterTokens)}`);
+}
+if (frontmatterLinks[0].path !== "03_Areas/0302_RAG/_Index.md" || frontmatterLinks[0].label !== "RAG") {
+  throw new Error(`The first frontmatter related entry was not normalized: ${JSON.stringify(frontmatterLinks[0])}`);
+}
+if (frontmatterLinks[1].path !== "05_Skills/0502_Markdown/_Index.md" || frontmatterLinks[1].label !== "Markdown") {
+  throw new Error(`The second frontmatter related entry was not normalized: ${JSON.stringify(frontmatterLinks[1])}`);
+}
+const sourceNotesText = frontmatterTokens.map((token) => token.kind === "text" ? token.text : token.label).join("");
+if (!sourceNotesText.includes("[[06_Archive/Sources/Dialogue|Source must remain literal]]")) {
+  throw new Error("A non-related frontmatter property was unexpectedly rewritten.");
+}
 const chatDocument = helpers.resolveVaultDocumentPath(
   "",
   "02_FICO/0203_Transfer%20Price/%E4%BE%9D%E6%8D%AE%E6%96%87%E6%A1%A3.md#section",
@@ -255,7 +310,7 @@ let replacedFragment;
 const upgradedAnchors = [];
 const malformedTextNode = {
   nodeType: 3,
-  nodeValue: "Source: [M100.2 rule](02_FICO/0203_Transfer Price/2026 Rule.md)",
+  nodeValue: "Source: [M100.2 rule](02_FICO/0203_Transfer Price/2026 Rule.md); related: [[02_FICO/0203_Transfer Price/_Index|Index]]",
 };
 const malformedParent = {
   closest() { return null; },
@@ -289,11 +344,14 @@ const malformedDocument = {
 };
 const malformedRoot = { nodeType: 1, ownerDocument: malformedDocument };
 const upgradedCount = helpers.upgradeMalformedVaultMarkdownLinks(malformedRoot);
-if (upgradedCount !== 1 || !replacedFragment || upgradedAnchors.length !== 1) {
-  throw new Error("Historical Markdown text was not upgraded into a clickable anchor.");
+if (upgradedCount !== 2 || !replacedFragment || upgradedAnchors.length !== 2) {
+  throw new Error("Historical Markdown and Obsidian links were not upgraded into clickable anchors.");
 }
 if (upgradedAnchors[0].getAttribute("data-knowledge-vault-path") !== "02_FICO/0203_Transfer Price/2026 Rule.md") {
   throw new Error("The upgraded historical link did not keep its resolved Vault path.");
+}
+if (upgradedAnchors[1].getAttribute("data-knowledge-vault-path") !== "02_FICO/0203_Transfer Price/_Index.md") {
+  throw new Error("The upgraded Obsidian relationship did not keep its resolved Vault path.");
 }
 const effectCleanups = [];
 plugin.apply({
@@ -594,6 +652,11 @@ try {
         'expandMarkdownDocument',
         'function renderMarkdownSource\(',
         'function resolveVaultDocumentPath\(',
+        'function normalizeObsidianDocumentLink\(',
+        'function rewriteObsidianDocumentLinkLine\(',
+        'function findObsidianVaultDocumentLinks\(',
+        'function tokenizeFrontmatterRelatedLinks\(',
+        'function FrontmatterDocumentProperties\(',
         'function findMalformedVaultMarkdownLinks\(',
         'function upgradeMalformedVaultMarkdownLinks\(',
         'data-vault-document-path',
