@@ -6,6 +6,7 @@ window.__ModuleLoader__.load({
     Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 
     const React = require("react");
+    const { MarkdownText } = require("@deepseek-ai/dsh-client-ui-primitives");
     const e = React.createElement;
     const API_PREFIX = "/knowledge-vault/api";
     const BRAND_LOGO_URL = "/knowledge-vault/assets/bkcs-logo.png";
@@ -25,6 +26,7 @@ window.__ModuleLoader__.load({
     });
     let pendingGraphSettings = null;
     let graphSettingsSavePromise = null;
+    let activeReaderDocument = null;
     const DOCUMENT_TITLE = "Knowledge Vault";
     const STYLE_ID = "@knowledge-vault/dsh-bootstrap/client.css";
     const css = `
@@ -57,11 +59,29 @@ window.__ModuleLoader__.load({
       .kv-tree-kind{width:16px;text-align:center;flex:0 0 16px;font-size:13px}
       .kv-tree-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .kv-preview{flex:1 1 48%;min-height:150px;display:flex;flex-direction:column;border-top:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-2)}
-      .kv-preview-header{min-height:42px;box-sizing:border-box;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+      .kv-preview-header{min-height:42px;box-sizing:border-box;padding:8px 8px 8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;align-items:center;gap:8px}
+      .kv-preview-heading{min-width:0;flex:1}
       .kv-preview-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .kv-preview-meta{margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .kv-preview-body{margin:0;padding:12px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:var(--dsw-alias-label-secondary);font:12px/1.65 var(--ds-font-family-code);flex:1}
+      .kv-preview-scroll{flex:1;min-height:0;overflow:auto}
+      .kv-preview-expand{height:28px;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2);border-radius:8px;background:var(--dsw-alias-button-elevated-fill);color:var(--dsw-alias-label-secondary);padding:0 8px;cursor:pointer;font:11px var(--dsw-font-family);white-space:nowrap}
+      .kv-preview-expand:hover{background:var(--dsw-alias-button-floating-hover);color:var(--dsw-alias-label-primary)}
       .kv-preview-empty{padding:14px;color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:20px}
+      .kv-markdown-document{box-sizing:border-box;color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family);font-size:15px;line-height:1.75;container-type:inline-size}
+      .kv-markdown-document[data-compact="true"]{padding:12px 13px;font-size:13px;line-height:1.65}
+      .kv-markdown-document[data-compact="false"]{width:min(920px,100%);margin:0 auto;padding:28px 34px 64px;font-size:16px;line-height:1.75}
+      .kv-markdown-frontmatter{margin:0 0 16px;border:1px solid var(--dsw-alias-border-l2);border-radius:10px;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-tertiary);font-size:11px;line-height:1.55}
+      .kv-markdown-frontmatter summary{cursor:pointer;padding:8px 10px;color:var(--dsw-alias-label-secondary);font-weight:600}
+      .kv-markdown-frontmatter pre{max-height:240px;margin:0;padding:0 10px 10px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.55 var(--ds-font-family-code)}
+      .kv-markdown-empty{color:var(--dsw-alias-label-tertiary);font-style:italic}
+      .kv-reader{height:100%;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family)}
+      .kv-reader-header{flex:none;min-height:58px;box-sizing:border-box;display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}
+      .kv-reader-heading{min-width:0;flex:1}
+      .kv-reader-title{font-size:15px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .kv-reader-meta{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .kv-reader-scroll{flex:1;min-height:0;overflow:auto}
+      .kv-reader-empty{display:grid;place-items:center;min-height:100%;padding:28px;color:var(--dsw-alias-label-tertiary);font-size:13px;text-align:center}
       .kv-graph{height:100%;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family)}
       .kv-graph-toolbar{flex:none;padding:12px 16px 10px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}
       .kv-graph-heading{display:flex;align-items:center;gap:10px;min-height:28px}
@@ -234,6 +254,122 @@ window.__ModuleLoader__.load({
       return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
     }
 
+    function isMarkdownDocument(document) {
+      return /\.md$/i.test(String(document?.path || document?.name || ""));
+    }
+
+    function splitMarkdownSource(source) {
+      const text = String(source || "").replace(/^\uFEFF/, "");
+      const match = text.match(/^---\s*\r?\n([\s\S]*?)\r?\n---\s*(?:\r?\n|$)/);
+      return match
+        ? { frontmatter: match[1].trim(), body: text.slice(match[0].length) }
+        : { frontmatter: "", body: text };
+    }
+
+    function MarkdownDocument({ document, compact = false }) {
+      const { frontmatter, body } = splitMarkdownSource(document?.content || "");
+      return e("article", {
+        className: "kv-markdown-document",
+        "data-compact": compact ? "true" : "false",
+      },
+        frontmatter ? e("details", { className: "kv-markdown-frontmatter" },
+          e("summary", null, "文档属性"),
+          e("pre", null, frontmatter),
+        ) : null,
+        body.trim()
+          ? e(MarkdownText, {
+            text: body,
+            codeLabels: { copyLabel: "复制", copiedLabel: "已复制" },
+          })
+          : e("div", { className: "kv-markdown-empty" }, "此 Markdown 文档没有正文。"),
+      );
+    }
+
+    function activateReaderTab() {
+      const tab = Array.from(document.querySelectorAll('[role="tab"]')).find(
+        (element) => element.textContent?.trim() === "阅读",
+      );
+      tab?.click();
+    }
+
+    function expandMarkdownDocument(document) {
+      if (!document?.previewable || !isMarkdownDocument(document)) return;
+      activeReaderDocument = document;
+      window.dispatchEvent(new CustomEvent("knowledge-vault:read-document", {
+        detail: { document },
+      }));
+      window.requestAnimationFrame(activateReaderTab);
+    }
+
+    function MarkdownReaderView() {
+      const [readerDocument, setReaderDocument] = React.useState(() => activeReaderDocument);
+      const [loading, setLoading] = React.useState(false);
+      const [error, setError] = React.useState("");
+
+      React.useEffect(() => {
+        const openDocument = (event) => {
+          const document = event?.detail?.document;
+          if (!document?.previewable || !isMarkdownDocument(document)) return;
+          activeReaderDocument = document;
+          setReaderDocument(document);
+          setError("");
+        };
+        const clearDocument = () => {
+          activeReaderDocument = null;
+          setReaderDocument(null);
+          setError("");
+        };
+        window.addEventListener("knowledge-vault:read-document", openDocument);
+        window.addEventListener("knowledge-vault:changed", clearDocument);
+        return () => {
+          window.removeEventListener("knowledge-vault:read-document", openDocument);
+          window.removeEventListener("knowledge-vault:changed", clearDocument);
+        };
+      }, []);
+
+      const refresh = async () => {
+        if (!readerDocument?.path) return;
+        setLoading(true);
+        setError("");
+        try {
+          const result = await getJson("file", readerDocument.path);
+          activeReaderDocument = result;
+          setReaderDocument(result);
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : String(cause));
+        } finally {
+          setLoading(false);
+        }
+      };
+
+      if (!readerDocument) {
+        return e("section", { className: "kv-reader", "aria-label": "Markdown 阅读器" },
+          e("div", { className: "kv-reader-empty" }, "请先在右侧知识库中选择 Markdown 文档，然后点击“放大阅读”。"),
+        );
+      }
+
+      return e("section", { className: "kv-reader", "aria-label": "Markdown 阅读器" },
+        e("header", { className: "kv-reader-header" },
+          e("div", { className: "kv-reader-heading" },
+            e("div", { className: "kv-reader-title", title: readerDocument.name }, readerDocument.name),
+            e("div", { className: "kv-reader-meta", title: readerDocument.path },
+              `${readerDocument.path} · ${formatBytes(readerDocument.bytes || 0)}`,
+            ),
+          ),
+          e("button", {
+            type: "button",
+            className: "kv-graph-action",
+            onClick: refresh,
+            disabled: loading,
+          }, loading ? "刷新中…" : "刷新文档"),
+        ),
+        error ? e("div", { className: "kv-explorer-status" }, error) : null,
+        e("div", { className: "kv-reader-scroll" },
+          e(MarkdownDocument, { document: readerDocument }),
+        ),
+      );
+    }
+
     function TreeNode({ entry, depth, selectedPath, onSelect }) {
       const [expanded, setExpanded] = React.useState(false);
       const [children, setChildren] = React.useState(null);
@@ -325,6 +461,7 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         const refreshActiveVault = () => {
+          activeReaderDocument = null;
           setSelected(null);
           setPreview(null);
           setRevision((value) => value + 1);
@@ -363,7 +500,13 @@ window.__ModuleLoader__.load({
       if (preview?.loading) previewContent = e("div", { className: "kv-preview-empty" }, "正在读取…");
       else if (preview?.error) previewContent = e("div", { className: "kv-preview-empty" }, preview.error);
       else if (preview && !preview.previewable) previewContent = e("div", { className: "kv-preview-empty" }, "这是附件或较大的文件，目录中已保留其位置和大小。");
-      else if (preview?.previewable) previewContent = e("pre", { className: "kv-preview-body" }, preview.content || "");
+      else if (preview?.previewable && isMarkdownDocument(preview)) {
+        previewContent = e("div", { className: "kv-preview-scroll" },
+          e(MarkdownDocument, { document: preview, compact: true }),
+        );
+      } else if (preview?.previewable) {
+        previewContent = e("pre", { className: "kv-preview-body" }, preview.content || "");
+      }
 
       return e("aside", { ref: panelRef, className: "kv-explorer", "aria-label": "知识库浏览器" },
         e("header", { className: "kv-explorer-header" },
@@ -389,10 +532,18 @@ window.__ModuleLoader__.load({
         ),
         e("section", { className: "kv-preview" },
           preview ? e("div", { className: "kv-preview-header" },
-            e("div", { className: "kv-preview-name", title: preview.name }, preview.name),
-            e("div", { className: "kv-preview-meta", title: preview.path },
-              preview.bytes === undefined ? preview.path : `${preview.path} · ${formatBytes(preview.bytes)}`,
+            e("div", { className: "kv-preview-heading" },
+              e("div", { className: "kv-preview-name", title: preview.name }, preview.name),
+              e("div", { className: "kv-preview-meta", title: preview.path },
+                preview.bytes === undefined ? preview.path : `${preview.path} · ${formatBytes(preview.bytes)}`,
+              ),
             ),
+            preview.previewable && isMarkdownDocument(preview) ? e("button", {
+              type: "button",
+              className: "kv-preview-expand",
+              title: "在主区域打开 Markdown 阅读器",
+              onClick: () => expandMarkdownDocument(preview),
+            }, "放大阅读") : null,
           ) : null,
           previewContent,
         ),
@@ -1891,6 +2042,12 @@ window.__ModuleLoader__.load({
         order: 30,
         label: () => "统计",
       }, KnowledgeStatsView));
+      ctx.slots.inject("conversation.view", () => ctx.slots.register({
+        name: "conversation.view",
+        id: "knowledge-reader",
+        order: 40,
+        label: () => "阅读",
+      }, MarkdownReaderView));
       ctx.slots.inject("shell.overlay", () => ctx.slots.register({
         name: "shell.overlay",
         id: "knowledge-vault-browser",

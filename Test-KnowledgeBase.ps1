@@ -384,49 +384,63 @@ try {
         -Uri ("http://127.0.0.1:{0}/plugins/@knowledge-vault/dsh-bootstrap/client.js" -f $port) `
         -UseBasicParsing `
         -TimeoutSec 5
-    if (
-        $clientBundleResponse.StatusCode -ne 200 -or
-        $clientBundleResponse.Content -notmatch 'kv-explorer' -or
-        $clientBundleResponse.Content -notmatch 'kv-init-launcher' -or
-        $clientBundleResponse.Content -notmatch 'ctx.workspaces.pickDirectory' -or
-        $clientBundleResponse.Content -notmatch 'postJson\("initialize"' -or
-        $clientBundleResponse.Content -notmatch 'postJson\("select"' -or
-        $clientBundleResponse.Content -notmatch 'kv-hero-logo' -or
-        $clientBundleResponse.Content -notmatch 'width: 258' -or
-        $clientBundleResponse.Content -notmatch 'hiddenSiblings.forEach' -or
-        $clientBundleResponse.Content -notmatch '/knowledge-vault/assets/bkcs-logo.png' -or
-        $clientBundleResponse.Content -notmatch 'DOCUMENT_TITLE = "Knowledge Vault"' -or
-        $clientBundleResponse.Content -notmatch '/knowledge-vault/assets/knowledge-vault-favicon.png' -or
-        $clientBundleResponse.Content -notmatch 'function BrandMark\(\)' -or
-        $clientBundleResponse.Content -notmatch 'width: 24' -or
-        $clientBundleResponse.Content -notmatch 'document title and favicon' -or
-        $clientBundleResponse.Content -notmatch 'id: "knowledge-graph"' -or
-        $clientBundleResponse.Content -notmatch 'id: "knowledge-stats"' -or
-        $clientBundleResponse.Content -notmatch 'function KnowledgeStatsView\(\)' -or
-        $clientBundleResponse.Content -notmatch 'kv-stat-cards' -or
-        $clientBundleResponse.Content -notmatch '/stats' -or
-        $clientBundleResponse.Content -notmatch 'function KnowledgeGraphView\(\)' -or
-        $clientBundleResponse.Content -notmatch 'function createGraphSimulation\(' -or
-        $clientBundleResponse.Content -notmatch 'function tickGraphSimulation\(' -or
-        $clientBundleResponse.Content -notmatch 'requestAnimationFrame' -or
-        $clientBundleResponse.Content -notmatch 'mode: "node"' -or
-        $clientBundleResponse.Content -notmatch 'hoveredNeighbors' -or
-        $clientBundleResponse.Content -notmatch 'simulationPaused' -or
-        $clientBundleResponse.Content -notmatch 'GRAPH_WORKER_THRESHOLD = 700' -or
-        $clientBundleResponse.Content -notmatch 'GRAPH_DYNAMIC_NODE_LIMIT = 3000' -or
-        $clientBundleResponse.Content -notmatch 'new Worker\(GRAPH_WORKER_URL' -or
-        $clientBundleResponse.Content -notmatch 'kv-graph-settings' -or
-        $clientBundleResponse.Content -notmatch 'knowledge-vault:graph-settings' -or
-        $clientBundleResponse.Content -notmatch '/graph-settings' -or
-        $clientBundleResponse.Content -notmatch 'settingsHydrated' -or
-        $clientBundleResponse.Content -notmatch 'data-ds-dark-theme' -or
-        $clientBundleResponse.Content -notmatch 'themeRevision' -or
-        $clientBundleResponse.Content -notmatch 'knowledge-vault:open-file' -or
-        $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
-        $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
-        $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-initializer"'
-    ) {
-        throw "The Knowledge Vault interactive client bundle is not available."
+    $clientBundleRequirements = @(
+        'kv-explorer',
+        'kv-init-launcher',
+        'ctx.workspaces.pickDirectory',
+        'postJson\("initialize"',
+        'postJson\("select"',
+        'kv-hero-logo',
+        'width: 258',
+        'hiddenSiblings.forEach',
+        '/knowledge-vault/assets/bkcs-logo.png',
+        'DOCUMENT_TITLE = "Knowledge Vault"',
+        '/knowledge-vault/assets/knowledge-vault-favicon.png',
+        'function BrandMark\(\)',
+        'width: 24',
+        'document title and favicon',
+        'id: "knowledge-graph"',
+        'id: "knowledge-stats"',
+        'id: "knowledge-reader"',
+        'function MarkdownReaderView\(\)',
+        'MarkdownText',
+        'knowledge-vault:read-document',
+        'expandMarkdownDocument',
+        'function KnowledgeStatsView\(\)',
+        'kv-stat-cards',
+        '/stats',
+        'function KnowledgeGraphView\(\)',
+        'function createGraphSimulation\(',
+        'function tickGraphSimulation\(',
+        'requestAnimationFrame',
+        'mode: "node"',
+        'hoveredNeighbors',
+        'simulationPaused',
+        'GRAPH_WORKER_THRESHOLD = 700',
+        'GRAPH_DYNAMIC_NODE_LIMIT = 3000',
+        'new Worker\(GRAPH_WORKER_URL',
+        'kv-graph-settings',
+        'knowledge-vault:graph-settings',
+        '/graph-settings',
+        'settingsHydrated',
+        'data-ds-dark-theme',
+        'themeRevision',
+        'knowledge-vault:open-file',
+        'name: "shell.overlay"',
+        'id: "knowledge-vault-browser"',
+        'id: "knowledge-vault-initializer"'
+    )
+    $missingClientBundleRequirements = @(
+        $clientBundleRequirements | Where-Object { $clientBundleResponse.Content -notmatch $_ }
+    )
+    if ($clientBundleResponse.StatusCode -ne 200 -or $missingClientBundleRequirements.Count -gt 0) {
+        $missingMarkers = if ($missingClientBundleRequirements.Count -gt 0) {
+            $missingClientBundleRequirements -join ', '
+        }
+        else {
+            '<none>'
+        }
+        throw "The Knowledge Vault interactive client bundle is not available. Missing markers: $missingMarkers"
     }
 
     $graphSettingsPath = Join-Path $runtimeRoot "graph-settings.json"
