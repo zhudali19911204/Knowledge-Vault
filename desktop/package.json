@@ -1,0 +1,16 @@
+{
+  "name": "@knowledge-vault/desktop",
+  "version": "1.0.7",
+  "private": true,
+  "description": "Desktop shell for Knowledge Vault Harness.",
+  "main": "main.cjs",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --config builder-config.cjs --win nsis --x64"
+  },
+  "devDependencies": {
+    "electron": "44.0.0",
+    "electron-builder": "26.15.3"
+  }
+}

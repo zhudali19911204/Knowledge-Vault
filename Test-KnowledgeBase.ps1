@@ -18,6 +18,11 @@ $graphWorkerPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstra
 $brandLogoPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\bkcs-logo.png"
 $faviconPath = Join-Path $productRoot ".dsh\plugins\knowledge-vault-bootstrap\assets\knowledge-vault-favicon.png"
 $manifestPath = Join-Path $productRoot "package.json"
+$desktopMainPath = Join-Path $productRoot "desktop\main.cjs"
+$desktopBuilderConfigPath = Join-Path $productRoot "desktop\builder-config.cjs"
+$desktopManifestPath = Join-Path $productRoot "desktop\package.json"
+$desktopLoadingPath = Join-Path $productRoot "desktop\loading.html"
+$desktopBuildScript = Join-Path $productRoot "Build-DesktopDistribution.ps1"
 
 foreach ($path in @(
     $localDshCommand,
@@ -29,6 +34,11 @@ foreach ($path in @(
     $brandLogoPath,
     $faviconPath,
     $manifestPath,
+    $desktopMainPath,
+    $desktopBuilderConfigPath,
+    $desktopManifestPath,
+    $desktopLoadingPath,
+    $desktopBuildScript,
     (Join-Path $vaultTemplateRoot "AGENTS.md"),
     (Join-Path $vaultTemplateRoot ".agents\scripts\knowledge_router.py")
 )) {
@@ -43,7 +53,8 @@ $parseFiles = @(
     "Install-KnowledgeBase.ps1",
     "Start-DeepSeekHarness.ps1",
     "Test-KnowledgeBase.ps1",
-    "Build-Distribution.ps1"
+    "Build-Distribution.ps1",
+    "Build-DesktopDistribution.ps1"
 )
 foreach ($file in $parseFiles) {
     $tokens = $null
@@ -67,6 +78,19 @@ if ($LASTEXITCODE -ne 0) {
 & node --check $graphWorkerPath
 if ($LASTEXITCODE -ne 0) {
     throw "Knowledge Vault graph worker syntax validation failed with exit code $LASTEXITCODE."
+}
+& node --check $desktopMainPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge Vault desktop shell syntax validation failed with exit code $LASTEXITCODE."
+}
+& node --check $desktopBuilderConfigPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge Vault desktop builder config validation failed with exit code $LASTEXITCODE."
+}
+$desktopManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $desktopManifestPath | ConvertFrom-Json
+$rootManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
+if ([string]$desktopManifest.version -ne [string]$rootManifest.version) {
+    throw "Desktop package version does not match the product version."
 }
 
 $graphSimulationSmoke = @'

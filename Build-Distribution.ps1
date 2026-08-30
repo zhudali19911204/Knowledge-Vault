@@ -94,6 +94,7 @@ try {
             "Knowledge-Vault-Harness/Initialize-KnowledgeBase.ps1",
             "Knowledge-Vault-Harness/Start-KnowledgeBase.cmd",
             "Knowledge-Vault-Harness/Test-KnowledgeBase.cmd",
+            "Knowledge-Vault-Harness/Build-DesktopDistribution.ps1",
             "Knowledge-Vault-Harness/package.json",
             "Knowledge-Vault-Harness/pnpm-lock.yaml",
             "Knowledge-Vault-Harness/pnpm-workspace.yaml",
@@ -106,7 +107,11 @@ try {
             "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/client.js",
             "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/graph-worker.js",
             "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/assets/bkcs-logo.png",
-            "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/assets/knowledge-vault-favicon.png"
+            "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/assets/knowledge-vault-favicon.png",
+            "Knowledge-Vault-Harness/desktop/package.json",
+            "Knowledge-Vault-Harness/desktop/main.cjs",
+            "Knowledge-Vault-Harness/desktop/loading.html",
+            "Knowledge-Vault-Harness/desktop/builder-config.cjs"
         )
         foreach ($requiredEntry in $requiredEntries) {
             if ($requiredEntry -notin $entryNames) {

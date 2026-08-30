@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Knowledge Vault</title>
+    <style>
+      :root{color-scheme:light dark;font-family:"Segoe UI","Microsoft YaHei UI",sans-serif}
+      *{box-sizing:border-box}
+      body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f7f8fa;color:#20242a}
+      main{width:min(420px,calc(100vw - 48px));text-align:center}
+      .mark{width:58px;height:58px;margin:0 auto 18px;border-radius:16px;display:grid;place-items:center;background:linear-gradient(145deg,#4f555e,#292d33);color:#ff7614;font-size:28px;font-weight:800;box-shadow:0 12px 34px #1e242d22}
+      h1{margin:0;font-size:22px;letter-spacing:.02em}
+      p{margin:10px 0 0;color:#717984;font-size:13px;line-height:1.7}
+      .bar{height:4px;margin-top:24px;border-radius:4px;overflow:hidden;background:#dfe3e8}
+      .bar::after{content:"";display:block;width:42%;height:100%;border-radius:4px;background:#ff7614;animation:loading 1.15s ease-in-out infinite alternate}
+      @keyframes loading{from{transform:translateX(-20%)}to{transform:translateX(170%)}}
+      @media(prefers-color-scheme:dark){body{background:#17191d;color:#f2f4f7}p{color:#9aa1ab}.bar{background:#30343a}}
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="mark">Z</div>
+      <h1>Knowledge Vault</h1>
+      <p>正在启动本地知识库服务，请稍候……</p>
+      <div class="bar" aria-label="正在启动"></div>
+    </main>
+  </body>
+</html>
