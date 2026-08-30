@@ -417,12 +417,72 @@ try {
         $clientBundleResponse.Content -notmatch 'new Worker\(GRAPH_WORKER_URL' -or
         $clientBundleResponse.Content -notmatch 'kv-graph-settings' -or
         $clientBundleResponse.Content -notmatch 'knowledge-vault:graph-settings' -or
+        $clientBundleResponse.Content -notmatch '/graph-settings' -or
+        $clientBundleResponse.Content -notmatch 'settingsHydrated' -or
+        $clientBundleResponse.Content -notmatch 'data-ds-dark-theme' -or
+        $clientBundleResponse.Content -notmatch 'themeRevision' -or
         $clientBundleResponse.Content -notmatch 'knowledge-vault:open-file' -or
         $clientBundleResponse.Content -notmatch 'name: "shell.overlay"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-browser"' -or
         $clientBundleResponse.Content -notmatch 'id: "knowledge-vault-initializer"'
     ) {
         throw "The Knowledge Vault interactive client bundle is not available."
+    }
+
+    $graphSettingsPath = Join-Path $runtimeRoot "graph-settings.json"
+    $initialGraphSettings = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/graph-settings" -f $port) `
+        -Method Get `
+        -TimeoutSec 5
+    if ($null -ne $initialGraphSettings.settings -or (Test-Path -LiteralPath $graphSettingsPath)) {
+        throw "The graph settings API did not start with an empty product-data configuration."
+    }
+    $requestedGraphSettings = [ordered]@{
+        repulsion = 230
+        linkDistance = 1.25
+        clusterStrength = 70
+        centerStrength = 18
+        nodeScale = 1.2
+        edgeWidth = 1.4
+        labelLimit = 140
+    }
+    $savedGraphSettings = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/graph-settings" -f $port) `
+        -Method Post `
+        -ContentType "application/json" `
+        -Body (@{ settings = $requestedGraphSettings } | ConvertTo-Json -Depth 4) `
+        -TimeoutSec 5
+    $loadedGraphSettings = Invoke-RestMethod `
+        -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/graph-settings" -f $port) `
+        -Method Get `
+        -TimeoutSec 5
+    $storedGraphSettings = Get-Content -Raw -Encoding UTF8 -LiteralPath $graphSettingsPath | ConvertFrom-Json
+    foreach ($settingName in $requestedGraphSettings.Keys) {
+        $expected = [double]$requestedGraphSettings[$settingName]
+        if (
+            [double]$savedGraphSettings.settings.$settingName -ne $expected -or
+            [double]$loadedGraphSettings.settings.$settingName -ne $expected -or
+            [double]$storedGraphSettings.settings.$settingName -ne $expected
+        ) {
+            throw "The graph settings API did not persist '$settingName' outside the Vault."
+        }
+    }
+    $invalidGraphSettingsRejected = $false
+    try {
+        $invalidGraphSettings = [ordered]@{} + $requestedGraphSettings
+        $invalidGraphSettings.repulsion = 999
+        Invoke-RestMethod `
+            -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/graph-settings" -f $port) `
+            -Method Post `
+            -ContentType "application/json" `
+            -Body (@{ settings = $invalidGraphSettings } | ConvertTo-Json -Depth 4) `
+            -TimeoutSec 5 | Out-Null
+    }
+    catch {
+        $invalidGraphSettingsRejected = $_.Exception.Response.StatusCode -eq [System.Net.HttpStatusCode]::BadRequest
+    }
+    if (-not $invalidGraphSettingsRejected) {
+        throw "The graph settings API accepted a value outside the allowed range."
     }
     $brandLogoResponse = Invoke-WebRequest `
         -Uri ("http://127.0.0.1:{0}/knowledge-vault/assets/bkcs-logo.png" -f $port) `

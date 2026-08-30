@@ -13,6 +13,7 @@ window.__ModuleLoader__.load({
     const GRAPH_WORKER_URL = "/knowledge-vault/assets/graph-worker.js";
     const GRAPH_WORKER_THRESHOLD = 700;
     const GRAPH_DYNAMIC_NODE_LIMIT = 3000;
+    const GRAPH_SETTINGS_STORAGE_KEY = "knowledge-vault:graph-settings";
     const DEFAULT_GRAPH_SETTINGS = Object.freeze({
       repulsion: 150,
       linkDistance: 1,
@@ -22,6 +23,8 @@ window.__ModuleLoader__.load({
       edgeWidth: 1,
       labelLimit: 100,
     });
+    let pendingGraphSettings = null;
+    let graphSettingsSavePromise = null;
     const DOCUMENT_TITLE = "Knowledge Vault";
     const STYLE_ID = "@knowledge-vault/dsh-bootstrap/client.css";
     const css = `
@@ -177,6 +180,40 @@ window.__ModuleLoader__.load({
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
       return body;
+    }
+
+    async function getGraphSettings() {
+      await waitForGraphSettingsSave();
+      const response = await fetch(`${API_PREFIX}/graph-settings`, {
+        headers: { accept: "application/json" },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      return body;
+    }
+
+    function startGraphSettingsSave() {
+      if (graphSettingsSavePromise || !pendingGraphSettings) return;
+      const settings = pendingGraphSettings;
+      pendingGraphSettings = null;
+      graphSettingsSavePromise = postJson("graph-settings", { settings }).catch(() => {
+        // The origin-scoped browser copy remains the fallback if backend persistence is unavailable.
+      }).finally(() => {
+        graphSettingsSavePromise = null;
+        startGraphSettingsSave();
+      });
+    }
+
+    function queueGraphSettingsSave(settings) {
+      pendingGraphSettings = { ...settings };
+      startGraphSettingsSave();
+    }
+
+    async function waitForGraphSettingsSave() {
+      while (pendingGraphSettings || graphSettingsSavePromise) {
+        startGraphSettingsSave();
+        if (graphSettingsSavePromise) await graphSettingsSavePromise;
+      }
     }
 
     async function postJson(route, value) {
@@ -832,6 +869,7 @@ window.__ModuleLoader__.load({
       const animationFrameRef = React.useRef(0);
       const workerRef = React.useRef(null);
       const autoPausedLargeGraphRef = React.useRef(false);
+      const settingsTouchedRef = React.useRef(false);
       const [graph, setGraph] = React.useState(null);
       const [loading, setLoading] = React.useState(true);
       const [error, setError] = React.useState("");
@@ -851,16 +889,18 @@ window.__ModuleLoader__.load({
       const [simulationActive, setSimulationActive] = React.useState(false);
       const [simulationPulse, setSimulationPulse] = React.useState(0);
       const [frameRevision, setFrameRevision] = React.useState(0);
+      const [themeRevision, setThemeRevision] = React.useState(0);
       const [layoutRevision, setLayoutRevision] = React.useState(0);
       const [settingsOpen, setSettingsOpen] = React.useState(false);
       const [settings, setSettings] = React.useState(() => {
         try {
-          const saved = JSON.parse(window.localStorage.getItem("knowledge-vault:graph-settings") || "null");
+          const saved = JSON.parse(window.localStorage.getItem(GRAPH_SETTINGS_STORAGE_KEY) || "null");
           return saved ? { ...DEFAULT_GRAPH_SETTINGS, ...saved } : { ...DEFAULT_GRAPH_SETTINGS };
         } catch {
           return { ...DEFAULT_GRAPH_SETTINGS };
         }
       });
+      const [settingsHydrated, setSettingsHydrated] = React.useState(false);
       const [workerAvailable, setWorkerAvailable] = React.useState(
         () => typeof Worker === "function",
       );
@@ -870,12 +910,39 @@ window.__ModuleLoader__.load({
       const [transform, setTransform] = React.useState({ x: 0, y: 0, scale: 1 });
 
       React.useEffect(() => {
+        let alive = true;
+        getGraphSettings().then((value) => {
+          if (!alive || !value?.settings || settingsTouchedRef.current) return;
+          setSettings({ ...DEFAULT_GRAPH_SETTINGS, ...value.settings });
+        }).catch(() => {
+          // The origin-scoped browser copy remains available if backend persistence is unavailable.
+        }).finally(() => {
+          if (alive) setSettingsHydrated(true);
+        });
+        return () => { alive = false; };
+      }, []);
+
+      React.useEffect(() => {
         try {
-          window.localStorage.setItem("knowledge-vault:graph-settings", JSON.stringify(settings));
+          window.localStorage.setItem(GRAPH_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
         } catch {
           // Settings remain available for this session if browser storage is unavailable.
         }
-      }, [settings]);
+        if (!settingsHydrated) return;
+        queueGraphSettingsSave(settings);
+      }, [settings, settingsHydrated]);
+
+      React.useEffect(() => {
+        if (typeof MutationObserver !== "function" || !document.body) return undefined;
+        const observer = new MutationObserver(() => {
+          setThemeRevision((value) => value + 1);
+        });
+        observer.observe(document.body, {
+          attributes: true,
+          attributeFilter: ["data-ds-dark-theme"],
+        });
+        return () => observer.disconnect();
+      }, []);
 
       React.useEffect(() => {
         let alive = true;
@@ -1164,7 +1231,8 @@ window.__ModuleLoader__.load({
         context.scale(transform.scale, transform.scale);
         context.lineCap = "round";
 
-        const dark = document.documentElement.classList.contains("dark") ||
+        const dark = document.body.hasAttribute("data-ds-dark-theme") ||
+          document.documentElement.classList.contains("dark") ||
           document.documentElement.dataset.theme === "dark" ||
           window.matchMedia?.("(prefers-color-scheme: dark)").matches;
         context.lineWidth = Math.max(.35, (.9 * settings.edgeWidth) / transform.scale);
@@ -1210,7 +1278,7 @@ window.__ModuleLoader__.load({
           }
         }
         context.globalAlpha = 1;
-      }, [visible, layout, size, transform, selectedId, hovered, hoveredNeighbors, labeledNodeIds, settings, frameRevision]);
+      }, [visible, layout, size, transform, selectedId, hovered, hoveredNeighbors, labeledNodeIds, settings, frameRevision, themeRevision]);
 
       const graphPoint = (event) => {
         const rect = canvasRef.current.getBoundingClientRect();
@@ -1371,9 +1439,11 @@ window.__ModuleLoader__.load({
         setRevision((value) => value + 1);
       };
       const updateSetting = (name, value) => {
+        settingsTouchedRef.current = true;
         setSettings((current) => ({ ...current, [name]: Number(value) }));
       };
       const resetGraphSettings = () => {
+        settingsTouchedRef.current = true;
         setSettings({ ...DEFAULT_GRAPH_SETTINGS });
       };
       const resetGraphLayout = () => {
@@ -1513,8 +1583,8 @@ window.__ModuleLoader__.load({
             settingRow("标签数量", "labelLimit", 0, 300, 10),
             e("div", { className: "kv-graph-settings-note" },
               useWorker
-                ? `当前由 Web Worker 后台计算；${largeGraph ? "大图谱标签自动限制为最多 30 个。" : "界面交互不会被布局计算阻塞。"}`
-                : `少于 ${GRAPH_WORKER_THRESHOLD} 个可见节点时使用主线程动画。设置仅保存在当前浏览器。`,
+                ? `当前由 Web Worker 后台计算；${largeGraph ? "大图谱标签自动限制为最多 30 个。" : "界面交互不会被布局计算阻塞。"} 设置自动保存到本机。`
+                : `少于 ${GRAPH_WORKER_THRESHOLD} 个可见节点时使用主线程动画。设置自动保存到本机，重启后继续使用。`,
             ),
             e("div", { className: "kv-graph-settings-actions" },
               e("button", { type: "button", className: "kv-graph-action", onClick: resetGraphSettings }, "恢复默认"),

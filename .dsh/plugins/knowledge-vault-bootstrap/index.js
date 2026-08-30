@@ -30,12 +30,22 @@ const FAVICON_ROUTE = "/knowledge-vault/assets/knowledge-vault-favicon.png";
 const FAVICON_SOURCE = new URL("./assets/knowledge-vault-favicon.png", import.meta.url);
 const GRAPH_WORKER_ROUTE = "/knowledge-vault/assets/graph-worker.js";
 const GRAPH_WORKER_SOURCE = new URL("./graph-worker.js", import.meta.url);
+const GRAPH_SETTINGS_FILE = "graph-settings.json";
 const MAX_PREVIEW_BYTES = 1024 * 1024;
 const MAX_INITIALIZE_BODY_BYTES = 16 * 1024;
 const MAX_GRAPH_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_GRAPH_FILES = 5000;
 const MAX_STATS_FILES = 20000;
 const GRAPH_CACHE_TTL_MS = 5000;
+const GRAPH_SETTING_RANGES = Object.freeze({
+  repulsion: [40, 400],
+  linkDistance: [.6, 1.8],
+  clusterStrength: [0, 120],
+  centerStrength: [0, 50],
+  nodeScale: [.6, 2],
+  edgeWidth: [.5, 3],
+  labelLimit: [0, 300],
+});
 const GRAPH_IGNORED_DIRECTORIES = new Set([
   ".git",
   ".dsh",
@@ -302,6 +312,51 @@ function assertSameOrigin(req) {
   if (originHost.toLowerCase() !== host.toLowerCase()) {
     throw Object.assign(new Error("不允许从其他页面更改本机知识库。"), { statusCode: 403 });
   }
+}
+
+function normalizeGraphSettings(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw Object.assign(new Error("图谱设置必须是一个对象。"), { statusCode: 400 });
+  }
+  const normalized = {};
+  for (const [name, [minimum, maximum]] of Object.entries(GRAPH_SETTING_RANGES)) {
+    const setting = Number(value[name]);
+    if (!Number.isFinite(setting) || setting < minimum || setting > maximum) {
+      throw Object.assign(new Error(`图谱设置 ${name} 超出允许范围。`), { statusCode: 400 });
+    }
+    normalized[name] = setting;
+  }
+  return normalized;
+}
+
+async function resolveGraphSettingsPath() {
+  const { productConfig } = await resolveInitializationPaths();
+  return join(dirname(productConfig), GRAPH_SETTINGS_FILE);
+}
+
+async function readGraphSettings() {
+  const settingsPath = await resolveGraphSettingsPath();
+  let value;
+  try {
+    value = JSON.parse(await readFile(settingsPath, "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw new Error(`Unable to read graph settings: ${error?.message || error}`);
+  }
+  try {
+    return normalizeGraphSettings(value?.settings);
+  } catch (error) {
+    throw new Error(`Stored graph settings are invalid: ${error?.message || error}`);
+  }
+}
+
+async function persistGraphSettings(settings) {
+  const settingsPath = await resolveGraphSettingsPath();
+  await mkdir(dirname(settingsPath), { recursive: true });
+  await writeFile(settingsPath, `${JSON.stringify({
+    settings,
+    updatedAt: new Date().toISOString(),
+  }, null, 2)}\n`, "utf8");
 }
 
 async function resolveVaultPath(vaultRoot, requestedPath) {
@@ -923,6 +978,38 @@ function createStatsHandler(resolveActiveVault, graphCache, statsCache) {
   };
 }
 
+function createGraphSettingsHandler(ctx) {
+  return async (req, res) => {
+    if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "POST") {
+      sendJson(res, 405, { error: "Method not allowed." });
+      return;
+    }
+    try {
+      if (req.method === "POST") {
+        assertSameOrigin(req);
+        const body = await readJsonBody(req);
+        const settings = normalizeGraphSettings(body.settings);
+        await persistGraphSettings(settings);
+        sendJson(res, 200, { settings });
+        return;
+      }
+      const settings = await readGraphSettings();
+      if (req.method === "HEAD") {
+        res.statusCode = 200;
+        res.end();
+        return;
+      }
+      sendJson(res, 200, { settings });
+    } catch (error) {
+      const statusCode = Number.isInteger(error?.statusCode) ? error.statusCode : 500;
+      ctx.logger.warn(`knowledge graph settings request failed: ${error?.stack || error}`);
+      sendJson(res, statusCode, {
+        error: statusCode === 500 ? "无法读取或保存图谱设置。" : error.message,
+      });
+    }
+  };
+}
+
 function createInitializationHandler(ctx, state) {
   return async (req, res) => {
     if (req.method !== "POST") {
@@ -1079,6 +1166,11 @@ async function apply(ctx) {
       path: `${API_PREFIX}/stats`,
       handler: createStatsHandler(() => state.vaultRoot, state.graphCache, state.statsCache),
     });
+    const disposeGraphSettings = ctx.webServer.register({
+      kind: "exact",
+      path: `${API_PREFIX}/graph-settings`,
+      handler: createGraphSettingsHandler(ctx),
+    });
     const disposeInitialize = ctx.webServer.register({
       kind: "exact",
       path: `${API_PREFIX}/initialize`,
@@ -1110,6 +1202,7 @@ async function apply(ctx) {
       disposeBrandLogo();
       disposeSelect();
       disposeInitialize();
+      disposeGraphSettings();
       disposeStats();
       disposeGraph();
       disposeFile();
