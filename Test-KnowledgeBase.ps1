@@ -415,6 +415,8 @@ try {
     $clientBundleRequirements = @(
         'kv-explorer',
         'kv-init-launcher',
+        'createBookPlusIcon',
+        'kv-init-icon-svg',
         'ctx.workspaces.pickDirectory',
         'postJson\("initialize"',
         'postJson\("select"',

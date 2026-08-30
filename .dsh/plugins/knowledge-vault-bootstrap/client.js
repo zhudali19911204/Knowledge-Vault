@@ -39,7 +39,8 @@ window.__ModuleLoader__.load({
       .kv-init-button{box-sizing:border-box;width:100%;height:38px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-button-elevated-fill);color:var(--dsw-alias-label-primary);display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 12px;cursor:pointer;font:500 14px/22px var(--dsw-font-family);white-space:nowrap;overflow:hidden}
       .kv-init-button:hover{background:var(--dsw-alias-button-floating-hover)}
       .kv-init-button:disabled{cursor:wait;opacity:.65}
-      .kv-init-icon{font-size:17px;line-height:18px;flex:none}
+      .kv-init-icon{width:18px;height:18px;display:inline-grid;place-items:center;font-size:16px;line-height:1;flex:none}
+      .kv-init-icon-svg{display:block;width:16px;height:16px;overflow:visible}
       .kv-init-status{padding:5px 6px 0;color:var(--dsw-alias-label-tertiary);font:11px/16px var(--dsw-font-family);overflow-wrap:anywhere}
       [class*="_collapsed"] .kv-init-launcher{width:36px;margin:0 0 12px}
       [class*="_collapsed"] .kv-init-button{width:36px;height:36px;border-color:transparent;background:transparent;padding:0}
@@ -1874,7 +1875,32 @@ window.__ModuleLoader__.load({
           const launcher = document.createElement("div");
           launcher.className = "kv-init-launcher";
 
-          const createButton = (text, title, iconText) => {
+          const createBookPlusIcon = () => {
+            const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            svg.classList.add("kv-init-icon-svg");
+            svg.setAttribute("viewBox", "0 0 24 24");
+            svg.setAttribute("fill", "none");
+            svg.setAttribute("stroke", "currentColor");
+            svg.setAttribute("stroke-width", "2");
+            svg.setAttribute("stroke-linecap", "round");
+            svg.setAttribute("stroke-linejoin", "round");
+            svg.setAttribute("focusable", "false");
+            const paths = [
+              "M12 7v14",
+              "M16 12h2",
+              "M17 11v2",
+              "M3 18a1 1 0 0 1-1-1V5a2 2 0 0 1 2-2h5a3 3 0 0 1 3 3v15a3 3 0 0 0-3-3Z",
+              "M21 18a1 1 0 0 0 1-1V5a2 2 0 0 0-2-2h-5a3 3 0 0 0-3 3v15a3 3 0 0 1 3-3Z",
+            ];
+            for (const value of paths) {
+              const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+              path.setAttribute("d", value);
+              svg.append(path);
+            }
+            return svg;
+          };
+
+          const createButton = (text, title, iconContent) => {
             const action = document.createElement("button");
             action.type = "button";
             action.className = "kv-init-button";
@@ -1883,7 +1909,8 @@ window.__ModuleLoader__.load({
             const icon = document.createElement("span");
             icon.className = "kv-init-icon";
             icon.setAttribute("aria-hidden", "true");
-            icon.textContent = iconText;
+            if (typeof iconContent === "function") icon.append(iconContent());
+            else icon.textContent = iconContent;
             const label = document.createElement("span");
             label.className = "kv-init-label";
             label.textContent = text;
@@ -1893,7 +1920,7 @@ window.__ModuleLoader__.load({
           const initializeButton = createButton(
             "初始化知识库",
             "在指定位置初始化并切换到自己的知识库",
-            "⊕",
+            createBookPlusIcon,
           );
           const selectButton = createButton(
             "选择知识库",
