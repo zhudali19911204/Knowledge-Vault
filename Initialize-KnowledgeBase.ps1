@@ -79,7 +79,11 @@ if (-not $alreadyInitialized) {
         if (-not (Test-Path -LiteralPath $source -PathType Container)) {
             throw "Knowledge Vault template directory is missing: $source"
         }
-        Copy-Item -LiteralPath $source -Destination (Join-Path $vaultRoot $directoryName) -Recurse
+        $destinationDirectory = Join-Path $vaultRoot $directoryName
+        New-Item -ItemType Directory -Path $destinationDirectory | Out-Null
+        foreach ($sourceEntry in @(Get-ChildItem -LiteralPath $source -Force)) {
+            Copy-Item -LiteralPath $sourceEntry.FullName -Destination $destinationDirectory -Recurse -Force
+        }
     }
 
     $knowledgeHomeName = -join @([char]0x77E5, [char]0x8BC6, [char]0x5E93, [char]0x9996, [char]0x9875) + ".md"

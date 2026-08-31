@@ -549,6 +549,41 @@ function Invoke-DshRpc {
         -TimeoutSec 5
 }
 
+function Assert-VaultDirectoryInheritance {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$VaultRoot,
+        [Parameter(Mandatory = $true)]
+        [string]$InitializerName
+    )
+
+    $protectedDirectories = @()
+    foreach ($directoryName in @(
+        ".agents",
+        ".dsh",
+        ".obsidian",
+        "01_Inbox",
+        "02_Domains",
+        "03_Areas",
+        "04_Resources",
+        "05_Skills",
+        "06_Archive",
+        "07_Attachments"
+    )) {
+        $directoryPath = Join-Path $VaultRoot $directoryName
+        if (-not (Test-Path -LiteralPath $directoryPath -PathType Container)) {
+            throw "$InitializerName did not create required directory: $directoryPath"
+        }
+        if ((Get-Acl -LiteralPath $directoryPath).AreAccessRulesProtected) {
+            $protectedDirectories += $directoryName
+        }
+    }
+
+    if ($protectedDirectories.Count -gt 0) {
+        throw "$InitializerName created directories with protected ACL inheritance: $($protectedDirectories -join ', ')"
+    }
+}
+
 try {
     Write-Host "Initializing a clean Knowledge Vault..."
     & $initializer -Destination $initializedVault -DataRoot $runtimeRoot
@@ -565,6 +600,7 @@ try {
             throw "Initialized Vault is missing: $requiredVaultEntry"
         }
     }
+    Assert-VaultDirectoryInheritance -VaultRoot $initializedVault -InitializerName "PowerShell initializer"
     $productConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $runtimeRoot "product.json") | ConvertFrom-Json
     if (-not [string]::Equals([string]$productConfig.vaultRoot, $initializedVault, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The one-click initializer did not persist the selected Vault path."
@@ -1004,6 +1040,7 @@ try {
             throw "The in-app initialized Vault is missing: $requiredVaultEntry"
         }
     }
+    Assert-VaultDirectoryInheritance -VaultRoot $uiInitializedVault -InitializerName "In-app initializer"
     $uiProductConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $runtimeRoot "product.json") | ConvertFrom-Json
     if (-not [string]::Equals([string]$uiProductConfig.vaultRoot, $uiInitializedVault, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The in-app initializer did not persist the newly selected Vault path."

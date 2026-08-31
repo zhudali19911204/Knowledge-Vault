@@ -191,7 +191,9 @@ async function assertTemplateTreeSafe(directory) {
 
 async function copyTemplateIntoEmptyVault(templateRoot, vaultRoot) {
   const templateEntries = await assertTemplateTreeSafe(templateRoot);
-  const stageRoot = join(dirname(vaultRoot), `.knowledge-vault-initialize-${randomUUID()}`);
+  // Keep staging inside the selected Vault so Windows sandbox ACLs inherited
+  // by the Vault root also flow to every initialized child directory.
+  const stageRoot = join(vaultRoot, `.knowledge-vault-initialize-${randomUUID()}`);
   const movedNames = [];
   await mkdir(stageRoot);
   try {
