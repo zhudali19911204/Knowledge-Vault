@@ -12,6 +12,7 @@ $vaultTemplateRoot = Join-Path $productRoot "vault-template"
 $captureSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\SKILL.md"
 $captureScriptPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py"
 $captureRulesPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\references\conversion-rules.md"
+$organizeSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-organize\SKILL.md"
 $inboxTemplateName = "Inbox $([char]0x6536)$([char]0x96C6)$([char]0x6A21)$([char]0x677F).md"
 $inboxTemplateRelativePath = Join-Path "05_Skills\0501_Knowledge Management\050101_Templates" $inboxTemplateName
 $inboxTemplatePath = Join-Path $vaultTemplateRoot $inboxTemplateRelativePath
@@ -52,6 +53,7 @@ foreach ($path in @(
     $captureSkillPath,
     $captureScriptPath,
     $captureRulesPath,
+    $organizeSkillPath,
     $inboxTemplatePath,
     (Join-Path $vaultTemplateRoot "AGENTS.md"),
     (Join-Path $vaultTemplateRoot ".agents\scripts\knowledge_router.py")
@@ -124,6 +126,25 @@ if (
     $inboxTemplate -notmatch 'conversion_mode:'
 ) {
     throw "Knowledge capture Skill or streamlined Inbox template is not configured for document conversion."
+}
+$organizeSkill = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizeSkillPath
+$vaultAgent = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $vaultTemplateRoot "AGENTS.md")
+if (
+    $organizeSkill -notmatch '\bcustom\b' -or
+    $organizeSkill -notmatch '\brecommend\b' -or
+    $organizeSkill -notmatch '\bSOP\b' -or
+    $organizeSkill -notmatch '!\[\[07_Attachments/' -or
+    $organizeSkill -notmatch 'route_confidence' -or
+    $organizeSkill -notmatch 'knowledge_router\.py'
+) {
+    throw "Knowledge organize Skill is not configured for custom or AI-recommended atomic-card plans."
+}
+if (
+    $vaultAgent -notmatch 'knowledge-skill' -or
+    $vaultAgent -notmatch '07_Attachments/' -or
+    $vaultAgent -notmatch 'route_confidence'
+) {
+    throw "Vault AGENTS.md is missing shared knowledge-card safety rules."
 }
 $desktopManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $desktopManifestPath | ConvertFrom-Json
 $rootManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
@@ -594,6 +615,7 @@ try {
         ".dsh\skills",
         ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
         ".dsh\skills\knowledge-capture\references\conversion-rules.md",
+        ".dsh\skills\knowledge-organize\SKILL.md",
         $inboxTemplateRelativePath
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $initializedVault $requiredVaultEntry))) {
@@ -1034,7 +1056,8 @@ try {
         "07_Attachments",
         ".dsh\skills",
         ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
-        ".dsh\skills\knowledge-capture\references\conversion-rules.md"
+        ".dsh\skills\knowledge-capture\references\conversion-rules.md",
+        ".dsh\skills\knowledge-organize\SKILL.md"
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $uiInitializedVault $requiredVaultEntry))) {
             throw "The in-app initialized Vault is missing: $requiredVaultEntry"
