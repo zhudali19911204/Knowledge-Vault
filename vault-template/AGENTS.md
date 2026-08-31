@@ -14,7 +14,7 @@ Vault 根目录始终是本 `AGENTS.md` 所在目录。不得沿用其他项目�
 
 | 用户请求 | 必须使用的 Skill |
 |---|---|
-| `知识收`、`知识收 <文件或目录>` | `knowledge-capture`（`.dsh/skills/knowledge-capture/SKILL.md`） |
+| `知识收`、`知识收 <文件>` | `knowledge-capture`（`.dsh/skills/knowledge-capture/SKILL.md`） |
 | `知识理`、`知识理 <文件>` | `knowledge-organize`（`.dsh/skills/knowledge-organize/SKILL.md`） |
 | `知识联` 或维护知识关联 | `knowledge-link`（`.dsh/skills/knowledge-link/SKILL.md`） |
 | `知识巡` 或巡检知识库 | `knowledge-audit`（`.dsh/skills/knowledge-audit/SKILL.md`） |

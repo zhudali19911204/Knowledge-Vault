@@ -2,116 +2,35 @@
 title: "{{title}}"
 created: "{{date}} {{time}}"
 updated: "{{date}} {{time}}"
-source: manual
+source: file-conversion
+source_file: "{{source_file}}"
+source_path: "{{source_path}}"
+source_format: "{{source_format}}"
+source_bytes: {{source_bytes}}
+source_modified: "{{source_modified}}"
+source_sha256: "{{source_sha256}}"
+conversion_mode: "{{text|attachments|ocr}}"
 type: source
 status: inbox
 description: >
-  记录一次尚待提炼的对话或资料来源；仅在正式知识卡片信息不足、需要追溯背景与原文时使用。
+  由原始文件转换生成的来源文档；保留原始结构并记录不可转换项。
 aliases: []
-triggers: []
-use_when:
-  - 需要追溯知识来源或完整上下文
-do_not_use_when:
-  - 已有成熟的 knowledge-skill 可以直接回答
-match_questions: []
 domain: []
 project:
 maturity: seed
 retrieval_priority: low
-parent_index:
-source_notes: []
 route_to:
-route_confidence:
-route_reason:
-review_after:
 tags:
   - inbox
+  - file-conversion
 related: []
 ---
 
 # {{title}}
 
-## 30 秒摘要
+> [!info] 转换来源
+> `{{source_file}}` · {{source_bytes}} bytes · `{{conversion_mode}}`
 
-用 3–5 条说明这次对话或资料最重要的价值。
+{{按源文件顺序转换的正文、表格、列表、分页/幻灯片和图片或 OCR 内容}}
 
-## 原始问题与真实需求
-
-- 原始问题：
-- 真正想解决的需求：
-- 期望输出：
-
-## 背景与约束
-
-记录发生背景、已有条件、限制、假设和相关项目。
-
-## 原始表格保真记录（Excel / CSV / TSV 适用）
-
-- 原始文件名：
-- 指定工作表 / 表对象 / 区域：
-- 原始行列范围：
-- 原始附件或完整快照：
-- 文件大小 / 最后修改时间 / 哈希：
-- 已保留：行列顺序、表头、空值、数据类型、公式、缓存值、错误值、格式、合并、隐藏、筛选、冻结、批注、验证、命名区域。
-- 保真偏差：列出所有未保留、脱敏或无法验证的项目；没有则写“无”。
-- 敏感信息处理：说明是否发现敏感字段、保存位置、脱敏边界及用户明确授权的文件与范围；不在 Markdown 中重复敏感值本身。
-
-表格摘要和分析不能替代原始附件或完整逐行快照。不得只保留样例、聚合数字或异常清单。
-
-## 完整知识清单
-
-- 列出本次内容涉及的全部知识点，暂不因为篇幅主动省略。
-
-## 详细知识整理
-
-### 知识点一
-
-- 定义 / 结论：
-- 原理 / 依据：
-- 适用条件：
-- 示例：
-- 限制 / 风险：
-
-## 推理与决策过程
-
-记录方案比较、判断依据、已确认决策和被否决方案。
-
-## 方法 / 操作流程
-
-1. 
-
-## 示例 / 代码 / 配置
-
-
-## 容易遗漏的细节、例外与风险
-
-- 
-
-## 可执行行动
-
-- [ ] 
-
-## 重要原文 / 提示词 / 代码
-
-保留无法安全压缩的原话、提示词、配置、命令或关键片段。
-
-## 补充细节
-
-放置价值暂时不确定、但不应静默删除的信息。
-
-## 建议提炼的知识卡片
-
-- [ ] 卡片标题 — 它可以独立回答什么问题
-
-## 已提炼知识
-
-- 暂无；执行“知识理”后补充。
-
-## 未解决问题与待补充
-
-- 
-
-## 来源与相关主题
-
-- 来源：
-- 相关：
+<!-- 仅在存在无法转换、识别失败或版式偏差时添加“## 转换说明”。 -->

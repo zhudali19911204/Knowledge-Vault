@@ -9,6 +9,12 @@ Set-StrictMode -Version Latest
 
 $productRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path))
 $vaultTemplateRoot = Join-Path $productRoot "vault-template"
+$captureSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\SKILL.md"
+$captureScriptPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py"
+$captureRulesPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\references\conversion-rules.md"
+$inboxTemplateName = "Inbox $([char]0x6536)$([char]0x96C6)$([char]0x6A21)$([char]0x677F).md"
+$inboxTemplateRelativePath = Join-Path "05_Skills\0501_Knowledge Management\050101_Templates" $inboxTemplateName
+$inboxTemplatePath = Join-Path $vaultTemplateRoot $inboxTemplateRelativePath
 $localDshCommand = Join-Path $productRoot "node_modules\.bin\dsh.cmd"
 $launcher = Join-Path $productRoot "Start-DeepSeekHarness.ps1"
 $initializer = Join-Path $productRoot "Initialize-KnowledgeBase.ps1"
@@ -43,6 +49,10 @@ foreach ($path in @(
     $desktopManifestPath,
     $desktopLoadingPath,
     $desktopBuildScript,
+    $captureSkillPath,
+    $captureScriptPath,
+    $captureRulesPath,
+    $inboxTemplatePath,
     (Join-Path $vaultTemplateRoot "AGENTS.md"),
     (Join-Path $vaultTemplateRoot ".agents\scripts\knowledge_router.py")
 )) {
@@ -98,6 +108,22 @@ if ($LASTEXITCODE -ne 0) {
 & node --check $desktopBuilderConfigPath
 if ($LASTEXITCODE -ne 0) {
     throw "Knowledge Vault desktop builder config validation failed with exit code $LASTEXITCODE."
+}
+& python $captureScriptPath --help | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge capture converter validation failed with exit code $LASTEXITCODE."
+}
+$captureSkill = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureSkillPath
+$inboxTemplate = Get-Content -Raw -Encoding UTF8 -LiteralPath $inboxTemplatePath
+if (
+    $captureSkill -notmatch '--inspect' -or
+    $captureSkill -notmatch '\battachments\b' -or
+    $captureSkill -notmatch '\bocr\b' -or
+    $captureSkill -notmatch 'document_to_markdown.py' -or
+    $inboxTemplate -notmatch 'source_sha256:' -or
+    $inboxTemplate -notmatch 'conversion_mode:'
+) {
+    throw "Knowledge capture Skill or streamlined Inbox template is not configured for document conversion."
 }
 $desktopManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $desktopManifestPath | ConvertFrom-Json
 $rootManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $manifestPath | ConvertFrom-Json
@@ -526,7 +552,15 @@ function Invoke-DshRpc {
 try {
     Write-Host "Initializing a clean Knowledge Vault..."
     & $initializer -Destination $initializedVault -DataRoot $runtimeRoot
-    foreach ($requiredVaultEntry in @("AGENTS.md", "01_Inbox", "07_Attachments", ".dsh\skills")) {
+    foreach ($requiredVaultEntry in @(
+        "AGENTS.md",
+        "01_Inbox",
+        "07_Attachments",
+        ".dsh\skills",
+        ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
+        ".dsh\skills\knowledge-capture\references\conversion-rules.md",
+        $inboxTemplateRelativePath
+    )) {
         if (-not (Test-Path -LiteralPath (Join-Path $initializedVault $requiredVaultEntry))) {
             throw "Initialized Vault is missing: $requiredVaultEntry"
         }
@@ -534,6 +568,38 @@ try {
     $productConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $runtimeRoot "product.json") | ConvertFrom-Json
     if (-not [string]::Equals([string]$productConfig.vaultRoot, $initializedVault, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "The one-click initializer did not persist the selected Vault path."
+    }
+
+    $captureFixturePath = Join-Path $smokeRoot "capture-fixture.csv"
+    [System.IO.File]::WriteAllText(
+        $captureFixturePath,
+        "account,amount,description`n1000,12.50,first row`n2000,,empty amount`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $captureHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $captureFixturePath).Hash
+    $initializedCaptureScript = Join-Path $initializedVault ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py"
+    $captureManifestJson = & python `
+        $initializedCaptureScript `
+        $captureFixturePath `
+        --vault-root $initializedVault `
+        --mode text `
+        --title "Capture CSV Fixture"
+    if ($LASTEXITCODE -ne 0) {
+        throw "The bundled knowledge-capture converter failed with exit code $LASTEXITCODE."
+    }
+    $captureManifest = $captureManifestJson | ConvertFrom-Json
+    $captureNote = Get-Content -Raw -Encoding UTF8 -LiteralPath ([string]$captureManifest.markdown)
+    $captureHashAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $captureFixturePath).Hash
+    if (
+        $captureManifest.status -ne "ok" -or
+        -not $captureNote.StartsWith("---`n") -or
+        $captureNote -notmatch 'source_sha256:' -or
+        $captureNote -notmatch 'conversion_mode: text' -or
+        $captureNote -notmatch '\| 1 \| account \| amount \| description \|' -or
+        $captureNote -notmatch '\| 3 \| 2000 \|  \| empty amount \|' -or
+        $captureHashBefore -ne $captureHashAfter
+    ) {
+        throw "The bundled knowledge-capture converter did not preserve the CSV source in a streamlined Inbox note."
     }
 
     $graphFixtureRoot = Join-Path $initializedVault "02_Domains\0201_GraphTest"
@@ -926,7 +992,14 @@ try {
     if ($uiInitialization.alreadyInitialized) {
         throw "The in-app initializer incorrectly reported a clean target as already initialized."
     }
-    foreach ($requiredVaultEntry in @("AGENTS.md", "01_Inbox", "07_Attachments", ".dsh\skills")) {
+    foreach ($requiredVaultEntry in @(
+        "AGENTS.md",
+        "01_Inbox",
+        "07_Attachments",
+        ".dsh\skills",
+        ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
+        ".dsh\skills\knowledge-capture\references\conversion-rules.md"
+    )) {
         if (-not (Test-Path -LiteralPath (Join-Path $uiInitializedVault $requiredVaultEntry))) {
             throw "The in-app initialized Vault is missing: $requiredVaultEntry"
         }

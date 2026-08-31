@@ -16,12 +16,12 @@ triggers:
   - 知识巡
   - Obsidian
 use_when:
-  - 需要把 AI 对话或资料沉淀到知识库
+  - 需要把 Excel、PDF、Word 或 PowerPoint 文件转换到知识库
   - 需要设计知识分类、关联或检索流程
 do_not_use_when:
   - 用户正在询问具体专业问题且已有对应知识包
 match_questions:
-  - 如何把 AI 对话整理进 Obsidian？
+  - 如何把 Office 或 PDF 文件转换成 Obsidian Markdown？
   - 如何让 AI 快速匹配知识库文档？
 domain:
   - knowledge-management
