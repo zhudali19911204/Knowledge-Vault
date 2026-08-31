@@ -260,7 +260,7 @@ My-Vault/
 
 本项目通过锁文件固定 `@deepseek-ai/dsh@0.1.1-rc.2`，并使用 DSH 的 patch/plugin 机制完成自动装配：
 
-- `vault-template/AGENTS.md` 是初始化后 Vault 的工作区级强约束，定义目录、路由、检索与安全规则。
+- `vault-template/AGENTS.md` 是初始化后 Vault 的精简入口，只保留角色边界、全局安全规则和五个 Skill 的触发路由。
 - `vault-template/.dsh/skills/` 提供 `vault-retrieve`、`knowledge-capture`、`knowledge-organize`、`knowledge-link` 和 `knowledge-audit` 五个按需技能。
 - `.dsh/plugins/knowledge-vault-bootstrap/` 在每次启动时注册用户选定的 Vault，并提供界面内初始化、知识库选择、只读目录/文件接口、右侧知识库浏览器、Canvas 知识图谱和知识统计页；`graph-worker.js` 负责大图谱的后台物理布局。
 - `.dsh/plugins/knowledge-vault-bootstrap/assets/bkcs-logo.png` 是欢迎页使用的 BKCS Logo；按 258×82 CSS 像素等比显示，不替换左侧 Knowledge Vault 品牌。
@@ -420,4 +420,4 @@ git commit -m "Initialize knowledge base"
 - 一个可用的模型 API 密钥及对应的 API 地址、协议和模型 ID；由每位用户单独配置，不随项目分发。
 - Obsidian 为推荐工具，用于手工维护笔记、Properties、Bases 和双向链接；不是启动聊天界面的必要条件。
 
-模板源的详细规则见 `vault-template/05_Skills/0501_Knowledge Management/知识路由规则.md`；初始化后对应 Vault 内的 `05_Skills/0501_Knowledge Management/知识路由规则.md`。
+模板源的详细 Agent 规则已分别保存到 `vault-template/.dsh/skills/` 下的五个 `SKILL.md`；初始化后由 Vault 根目录的 `AGENTS.md` 按请求触发对应 Skill。

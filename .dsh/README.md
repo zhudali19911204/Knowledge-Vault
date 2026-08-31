@@ -4,7 +4,7 @@
 
 ## 加载关系
 
-- Vault 规则：模板源为 `../vault-template/AGENTS.md`，初始化后位于用户 Vault 根目录并由 workspace instructions 机制加载。
+- Vault 入口：模板源为 `../vault-template/AGENTS.md`，初始化后位于用户 Vault 根目录并由 workspace instructions 机制加载，只保留全局边界和 Skill 触发路由。
 - 按需技能：模板源为 `../vault-template/.dsh/skills/<skill-name>/SKILL.md`，初始化后由 filesystem skill provider 发现。
 - 自动绑定：`plugins/knowledge-vault-bootstrap/index.js` 通过 `workspaceRegistry` 注册启动器传入的 Vault 根目录，并提供只读的目录与文件预览接口。
 - 客户端界面：`plugins/knowledge-vault-bootstrap/client.js` 替换产品品牌，并将知识库目录树和文本预览固定在右侧工作栏。
