@@ -258,6 +258,8 @@ My-Vault/
 
 两种方案使用相同的知识完整性、检索元数据、图片引用、索引更新和安全路由约束。文件转换阶段以最大程度保留源信息为目标；表格不静默抽样，无法还原的版式或对象写入转换说明。
 
+`知识理` 按来源逐篇批处理，正常路径固定为三次工具调用：`prepare` 一次返回带证据标记的完整来源和紧凑契约，模型直接写一次 `cards.json`，随后 `apply --cleanup` 一次完成校验、渲染、反链、索引、定向路由和终检。流程禁止临时 builder 和重复打开来源或产物。存在 `needs-review` 卡片或路由失败时，来源继续留在 Inbox；全部卡片成功路由后才归档来源。
+
 ## DeepSeek Harness 底座
 
 本项目通过锁文件固定 `@deepseek-ai/dsh@0.1.1-rc.2`，并使用 DSH 的 patch/plugin 机制完成自动装配：
@@ -269,6 +271,7 @@ My-Vault/
 - `.dsh/plugins/knowledge-vault-bootstrap/assets/knowledge-vault-favicon.png` 是由灰橙 Z Logo 制作的透明图标，用于浏览器 favicon 和左侧栏 24×24 品牌标记；页面加载后标签标题固定为 `Knowledge Vault`。
 - 初始化后的 `05_Skills/` 仍是 Obsidian 内的可复用知识；`.dsh/skills/` 是 Agent 运行时说明，两者不混用。
 - `vault-template/.agents/scripts/knowledge_router.py` 是模板中的路由器，初始化后位于用户 Vault 的 `.agents/scripts/`。
+- `vault-template/.dsh/skills/knowledge-organize/scripts/organize_batch.py` 将单篇来源的紧凑卡片 JSON 批量落盘，避免模型逐卡重复读取来源、拼装 YAML 和维护索引。
 - 模型设置、API 密钥、会话和生成的 DSH patch 保存在 `%LOCALAPPDATA%\KnowledgeVaultHarness`，不进入发布包或 Vault。
 
 安装版和免安装版由 Electron 桌面壳承载页面；桌面壳会自动选择空闲的本机端口、启动固定版 Harness，并在退出时关闭该服务。普通用户不需要直接操作 Node.js 或浏览器。
@@ -376,9 +379,12 @@ python "vault-template/.agents/scripts/knowledge_router.py" --apply
 
 # 只读巡检
 python "vault-template/.agents/scripts/knowledge_router.py" --audit
+
+# 仅预览 JSON 清单中明确列出的 Inbox 笔记
+python "vault-template/.agents/scripts/knowledge_router.py" --notes-file "notes.json" --strict
 ```
 
-默认自动路由阈值为 `0.85`。目标只允许进入 `02_Domains`、`03_Areas`、`04_Resources`、`05_Skills` 或 `06_Archive`；同名文件不会被覆盖。
+默认自动路由阈值为 `0.85`。目标只允许进入 `02_Domains`、`03_Areas`、`04_Resources`、`05_Skills` 或 `06_Archive`；同名文件不会被覆盖。`--notes-file` 接受 JSON 路径数组或 `{ "notes": [...] }`，路径必须指向当前 Vault 的 `01_Inbox`；配合 `--strict` 时，任一选定笔记无法路由都会返回非零状态。
 
 ## 共享与版本控制
 

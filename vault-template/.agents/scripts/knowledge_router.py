@@ -81,6 +81,19 @@ def parse_args() -> argparse.Namespace:
         default=0.85,
         help="Minimum route_confidence required for moving a note (default: 0.85).",
     )
+    parser.add_argument(
+        "--notes-file",
+        type=Path,
+        help=(
+            "Optional JSON file containing Vault-relative Inbox note paths. "
+            "When provided, only those notes are previewed or moved."
+        ),
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Return a non-zero exit code when any selected note cannot be routed.",
+    )
     args = parser.parse_args()
     if not 0 <= args.confidence_threshold <= 1:
         parser.error("--confidence-threshold must be between 0 and 1")
@@ -146,14 +159,50 @@ def set_frontmatter_value(content: str, key: str, value: str) -> str:
     return content[:start] + yaml_text + content[end:]
 
 
-def routable_notes(inbox: Path) -> list[Path]:
+def routable_notes(inbox: Path, selected: list[Path] | None = None) -> list[Path]:
     if not inbox.is_dir():
         return []
+    if selected is not None:
+        return sorted(selected)
     return sorted(
         path
         for path in inbox.rglob("*.md")
         if path.is_file() and not path.stem.startswith("_")
     )
+
+
+def selected_notes(vault: Path, inbox: Path, notes_file: Path) -> list[Path]:
+    """Load an explicit, safe set of Inbox notes from a JSON file."""
+
+    try:
+        payload = json.loads(notes_file.expanduser().read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"cannot read --notes-file: {error}") from error
+
+    raw_notes = payload.get("notes") if isinstance(payload, dict) else payload
+    if not isinstance(raw_notes, list) or not raw_notes:
+        raise ValueError("--notes-file must contain a non-empty JSON list or a 'notes' list")
+
+    inbox_resolved = inbox.resolve()
+    selected: list[Path] = []
+    seen: set[str] = set()
+    for raw_note in raw_notes:
+        if not isinstance(raw_note, str) or not raw_note.strip():
+            raise ValueError("--notes-file contains an invalid note path")
+        candidate = (vault / Path(raw_note.replace("/", os.sep))).resolve()
+        try:
+            candidate.relative_to(inbox_resolved)
+        except ValueError as error:
+            raise ValueError(f"selected note is outside 01_Inbox: {raw_note}") from error
+        if candidate.suffix.lower() != ".md" or candidate.stem.startswith("_"):
+            raise ValueError(f"selected note is not a routable Markdown note: {raw_note}")
+        if not candidate.is_file():
+            raise ValueError(f"selected note does not exist: {raw_note}")
+        key = os.path.normcase(str(candidate))
+        if key not in seen:
+            seen.add(key)
+            selected.append(candidate)
+    return selected
 
 
 def resolve_numbered_parts(vault: Path, raw_parts: list[str]) -> list[str]:
@@ -448,12 +497,15 @@ def route_notes(
     *,
     apply_changes: bool,
     confidence_threshold: float,
-) -> None:
+    notes: list[Path] | None = None,
+) -> dict[str, int]:
     moved = 0
     pending = 0
     skipped = 0
 
-    for note in routable_notes(inbox):
+    candidates = routable_notes(inbox, notes)
+    planned = 0
+    for note in candidates:
         content = read_note(note)
         status = get_frontmatter_value(content, "status")
         route = get_frontmatter_value(content, "route_to")
@@ -490,6 +542,7 @@ def route_notes(
             continue
 
         if not apply_changes:
+            planned += 1
             print(f"[DRY-RUN] {note.name} -> {relative_route}")
             continue
 
@@ -509,7 +562,17 @@ def route_notes(
         print(f"[MOVED] {destination.relative_to(vault).as_posix()}")
 
     mode = "apply" if apply_changes else "dry-run"
-    print(f"Summary: moved={moved}, pending={pending}, skipped={skipped}, mode={mode}")
+    print(
+        f"Summary: selected={len(candidates)}, planned={planned}, moved={moved}, "
+        f"pending={pending}, skipped={skipped}, mode={mode}"
+    )
+    return {
+        "selected": len(candidates),
+        "planned": planned,
+        "moved": moved,
+        "pending": pending,
+        "skipped": skipped,
+    }
 
 
 def main() -> int:
@@ -523,12 +586,22 @@ def main() -> int:
     if args.audit:
         audit(vault, inbox)
     else:
-        route_notes(
+        selected = None
+        if args.notes_file is not None:
+            try:
+                selected = selected_notes(vault, inbox, args.notes_file)
+            except ValueError as error:
+                print(f"Invalid --notes-file: {error}", file=sys.stderr)
+                return 2
+        summary = route_notes(
             vault,
             inbox,
             apply_changes=args.apply,
             confidence_threshold=args.confidence_threshold,
+            notes=selected,
         )
+        if args.strict and (summary["pending"] or summary["skipped"]):
+            return 1
     return 0
 
 

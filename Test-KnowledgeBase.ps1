@@ -13,6 +13,7 @@ $captureSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\
 $captureScriptPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py"
 $captureRulesPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\references\conversion-rules.md"
 $organizeSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-organize\SKILL.md"
+$organizeScriptPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-organize\scripts\organize_batch.py"
 $inboxTemplateName = "Inbox $([char]0x6536)$([char]0x96C6)$([char]0x6A21)$([char]0x677F).md"
 $inboxTemplateRelativePath = Join-Path "05_Skills\0501_Knowledge Management\050101_Templates" $inboxTemplateName
 $inboxTemplatePath = Join-Path $vaultTemplateRoot $inboxTemplateRelativePath
@@ -54,6 +55,7 @@ foreach ($path in @(
     $captureScriptPath,
     $captureRulesPath,
     $organizeSkillPath,
+    $organizeScriptPath,
     $inboxTemplatePath,
     (Join-Path $vaultTemplateRoot "AGENTS.md"),
     (Join-Path $vaultTemplateRoot ".agents\scripts\knowledge_router.py")
@@ -128,6 +130,10 @@ $captureContractChecks = [ordered]@{
     "source hash metadata" = $inboxTemplate -match 'source_sha256:'
     "conversion mode metadata" = $inboxTemplate -match 'conversion_mode:'
 }
+& python $organizeScriptPath --help | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge organize batch script validation failed with exit code $LASTEXITCODE."
+}
 $captureContractFailures = @($captureContractChecks.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key })
 if ($captureContractFailures.Count -gt 0) {
     throw "Knowledge capture conversion contract failed: $($captureContractFailures -join ', ')"
@@ -140,7 +146,10 @@ if (
     $organizeSkill -notmatch '\bSOP\b' -or
     $organizeSkill -notmatch '!\[\[07_Attachments/' -or
     $organizeSkill -notmatch 'route_confidence' -or
-    $organizeSkill -notmatch 'knowledge_router\.py'
+    $organizeSkill -notmatch 'organize_batch\.py' -or
+    $organizeSkill -notmatch '--cards' -or
+    $organizeSkill -notmatch '--cleanup' -or
+    $organizeSkill -notmatch '\bbuilder\b'
 ) {
     throw "Knowledge organize Skill is not configured for custom or AI-recommended atomic-card plans."
 }
@@ -621,6 +630,7 @@ try {
         ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
         ".dsh\skills\knowledge-capture\references\conversion-rules.md",
         ".dsh\skills\knowledge-organize\SKILL.md",
+        ".dsh\skills\knowledge-organize\scripts\organize_batch.py",
         $inboxTemplateRelativePath
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $initializedVault $requiredVaultEntry))) {
@@ -663,6 +673,215 @@ try {
         $captureHashBefore -ne $captureHashAfter
     ) {
         throw "The bundled knowledge-capture converter did not preserve the CSV source in a streamlined Inbox note."
+    }
+
+    Write-Host "Testing manifest-based knowledge organization..."
+    $initializedOrganizeScript = Join-Path $initializedVault ".dsh\skills\knowledge-organize\scripts\organize_batch.py"
+    $unrelatedReadyPath = Join-Path $initializedVault "01_Inbox\Unrelated Ready.md"
+    [System.IO.File]::WriteAllText(
+        $unrelatedReadyPath,
+        "---`ntitle: Unrelated Ready`ntype: source`nstatus: ready`nroute_to: 03_Areas/Unrelated`nroute_confidence: 0.90`n---`n# Unrelated Ready`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $unicodeOutputFixture = (
+        [string][char]0x2714 + " " +
+        [string][char]0x4E2D + [string][char]0x6587 + " " +
+        [char]::ConvertFromUtf32(0x1F680)
+    )
+    [System.IO.File]::AppendAllText(
+        [string]$captureManifest.markdown,
+        "`n## Unicode output`n`n$unicodeOutputFixture`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $organizePrepareOutput = @(& python `
+        $initializedOrganizeScript `
+        prepare `
+        ([string]$captureManifest.markdown) `
+        --vault-root $initializedVault `
+        --mode recommend)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Knowledge organize prepare failed with exit code $LASTEXITCODE."
+    }
+    $organizePrepared = $organizePrepareOutput[0] | ConvertFrom-Json
+    if (
+        ($organizePrepareOutput -join "`n") -notmatch 'SOURCE WITH EVIDENCE IDS' -or
+        ($organizePrepareOutput -join "`n") -notmatch '<<<S\d{3}' -or
+        ($organizePrepareOutput -join "`n") -notmatch 'do not create a builder'
+    ) {
+        throw "Knowledge organize prepare did not return its compact contract and evidence-marked source."
+    }
+    $organizeManifestPath = [string]$organizePrepared.manifest
+    $organizeCardsPath = [string]$organizePrepared.cards_file
+    if (Test-Path -LiteralPath $organizeCardsPath) {
+        throw "Knowledge organize prepare created cards_file before the single model write."
+    }
+    $organizeManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizeManifestPath | ConvertFrom-Json
+    $evidenceId = [string]$organizeManifest.sections[1].id
+    $organizeCards = [ordered]@{ cards = @(
+        [pscustomobject]@{
+            title = "Interpret Complete Rows"
+            kind = "concept"
+            triggers = @("complete row")
+            use = @("interpret a populated cost row")
+            avoid = @("repair a missing amount")
+            questions = @("How should a complete cost row be interpreted?")
+            evidence = @($evidenceId)
+            route = "05_Skills/Organize Batch"
+            reason = "Reusable interpretation rule"
+            confidence = 0.93
+            conclusion = "Interpret account, amount, and description together."
+            body = "Read all populated columns from the same row. Account 1000 has amount 12.50 and description first row."
+            limits = "This card does not reconstruct formulas."
+        },
+        [pscustomobject]@{
+            title = "Handle Missing Amounts"
+            kind = "procedure"
+            triggers = @("missing amount")
+            use = @("review a row whose amount is empty")
+            avoid = @("an amount is already present")
+            questions = @("What should happen when an amount is missing?")
+            evidence = @($evidenceId)
+            route = "05_Skills/Organize Batch"
+            reason = "Reusable data-quality procedure"
+            confidence = 0.91
+            conclusion = "Keep the amount empty and flag it for review."
+            body = "Preserve the empty value and record the limitation. Account 2000 has an empty amount."
+            limits = "The source does not provide a replacement amount."
+        }
+    ) }
+    [System.IO.File]::WriteAllText(
+        $organizeCardsPath,
+        ($organizeCards | ConvertTo-Json -Depth 20),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $validSecondKind = $organizeCards.cards[1].kind
+    $validSecondConclusion = $organizeCards.cards[1].conclusion
+    $organizeCards.cards[1].kind = "summary"
+    $organizeCards.cards[1].conclusion = $organizeCards.cards[0].conclusion
+    [System.IO.File]::WriteAllText(
+        $organizeCardsPath,
+        ($organizeCards | ConvertTo-Json -Depth 20),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $qualityGateOutput = @(& python $initializedOrganizeScript apply $organizeManifestPath --cards $organizeCardsPath --vault-root $initializedVault 2>&1)
+    if (
+        $LASTEXITCODE -eq 0 -or
+        ($qualityGateOutput -join "`n") -notmatch 'knowledge_kind' -or
+        ($qualityGateOutput -join "`n") -notmatch 'conclusion'
+    ) {
+        throw "Knowledge organize quality gate accepted an invalid kind or duplicate conclusion."
+    }
+    $organizeCards.cards[1].kind = $validSecondKind
+    $organizeCards.cards[1].conclusion = $validSecondConclusion
+    [System.IO.File]::WriteAllText(
+        $organizeCardsPath,
+        ($organizeCards | ConvertTo-Json -Depth 20),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $organizeApplyJson = & python $initializedOrganizeScript apply $organizeManifestPath --cards $organizeCardsPath --vault-root $initializedVault
+    if ($LASTEXITCODE -ne 0) {
+        throw "Knowledge organize apply failed with exit code $LASTEXITCODE."
+    }
+    $organizeApply = $organizeApplyJson | ConvertFrom-Json
+    $organizedCardPaths = @($organizeApply.cards | ForEach-Object { Join-Path $initializedVault ([string]$_).Replace("/", "\") })
+    $organizedSource = Get-ChildItem -LiteralPath (Join-Path $initializedVault "06_Archive") -Recurse -File -Filter (Split-Path -Leaf ([string]$captureManifest.markdown)) | Select-Object -First 1
+    $organizedIndex = Get-ChildItem -LiteralPath (Join-Path $initializedVault "05_Skills") -Recurse -File -Filter "_Index.md" |
+        Where-Object { (Get-Content -Raw -Encoding UTF8 -LiteralPath $_.FullName) -match 'Interpret Complete Rows' } |
+        Select-Object -First 1
+    if (
+        $organizeApply.status -ne "ok" -or
+        $organizeApply.apply_status -ne "applied" -or
+        $organizedCardPaths.Count -ne 2 -or
+        @($organizedCardPaths | Where-Object { -not (Test-Path -LiteralPath $_) }).Count -gt 0 -or
+        $null -eq $organizedSource -or
+        $null -eq $organizedIndex -or
+        -not (Test-Path -LiteralPath $unrelatedReadyPath)
+    ) {
+        throw "Knowledge organize batch apply did not route exactly the selected cards and archive their completed source."
+    }
+    $organizedSourceText = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedSource.FullName
+    if ($organizedSourceText -notmatch 'Interpret Complete Rows' -or $organizedSourceText -notmatch 'Handle Missing Amounts') {
+        throw "Knowledge organize did not create source backlinks for every generated card."
+    }
+    $organizeNoOpJson = & python $initializedOrganizeScript apply $organizeManifestPath --cards $organizeCardsPath --vault-root $initializedVault
+    $organizeNoOp = $organizeNoOpJson | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or $organizeNoOp.status -ne "ok" -or $organizeNoOp.apply_status -ne "no-op") {
+        throw "Knowledge organize is not idempotent for an already applied manifest."
+    }
+
+    $lowConfidenceSourcePath = Join-Path $initializedVault "01_Inbox\Low Confidence Source.md"
+    [System.IO.File]::WriteAllText(
+        $lowConfidenceSourcePath,
+        "---`ntitle: Low Confidence Source`ntype: source`nstatus: inbox`n---`n`n# Uncertain rule`n`nThe source may describe a provisional rule.`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $lowPrepareOutput = @(& python $initializedOrganizeScript prepare $lowConfidenceSourcePath --vault-root $initializedVault --mode recommend)
+    $lowPrepared = $lowPrepareOutput[0] | ConvertFrom-Json
+    $lowManifestPath = [string]$lowPrepared.manifest
+    $lowCardsPath = [string]$lowPrepared.cards_file
+    if (Test-Path -LiteralPath $lowCardsPath) {
+        throw "Knowledge organize prepare created a low-confidence cards_file before the single model write."
+    }
+    $lowManifest = Get-Content -Raw -Encoding UTF8 -LiteralPath $lowManifestPath | ConvertFrom-Json
+    $lowCards = [ordered]@{ cards = @(
+        [pscustomobject]@{
+            title = "Review Provisional Rule"
+            kind = "concept"
+            triggers = @("provisional rule")
+            use = @("review a provisional rule")
+            avoid = @("treat a rule as confirmed")
+            questions = @("Is the provisional rule reliable?")
+            evidence = @([string]$lowManifest.sections[0].id)
+            route = "02_Domains/Provisional Rules"
+            reason = "Potential domain rule requiring review"
+            confidence = 0.70
+            conclusion = "The rule requires review before use."
+            body = "The source describes the rule as provisional."
+            limits = "The source does not confirm the rule."
+        }
+    ) }
+    [System.IO.File]::WriteAllText(
+        $lowCardsPath,
+        ($lowCards | ConvertTo-Json -Depth 20),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $lowApplyJson = & python $initializedOrganizeScript apply $lowManifestPath --cards $lowCardsPath --vault-root $initializedVault
+    $lowApply = $lowApplyJson | ConvertFrom-Json
+    $lowCardPath = Join-Path $initializedVault ([string]$lowApply.cards[0]).Replace("/", "\")
+    if (
+        $LASTEXITCODE -ne 0 -or
+        $lowApply.status -ne "ok" -or
+        -not (Test-Path -LiteralPath $lowConfidenceSourcePath) -or
+        -not (Test-Path -LiteralPath $lowCardPath) -or
+        -not ([string]$lowApply.cards[0]).StartsWith("01_Inbox/")
+    ) {
+        throw "Knowledge organize did not retain a low-confidence card and its source in Inbox."
+    }
+    $lowCards.expected = 2
+    [System.IO.File]::WriteAllText(
+        $lowCardsPath,
+        ($lowCards | ConvertTo-Json -Depth 20),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $lowManifest.mode = "custom"
+    [System.IO.File]::WriteAllText(
+        $lowManifestPath,
+        ($lowManifest | ConvertTo-Json -Depth 20),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    & python $initializedOrganizeScript apply $lowManifestPath --cards $lowCardsPath --vault-root $initializedVault | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        throw "Knowledge organize accepted a custom plan whose expected card count did not match."
+    }
+    $lowCards.expected = 1
+    [System.IO.File]::WriteAllText(
+        $lowCardsPath,
+        ($lowCards | ConvertTo-Json -Depth 20),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    & python $initializedOrganizeScript apply $lowManifestPath --cards $lowCardsPath --vault-root $initializedVault --cleanup | Out-Null
+    if ($LASTEXITCODE -ne 0 -or (Test-Path -LiteralPath $lowManifestPath) -or (Test-Path -LiteralPath $lowCardsPath)) {
+        throw "Knowledge organize apply --cleanup did not remove verified temporary inputs."
     }
 
     $graphFixtureRoot = Join-Path $initializedVault "02_Domains\0201_GraphTest"
@@ -1062,7 +1281,8 @@ try {
         ".dsh\skills",
         ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
         ".dsh\skills\knowledge-capture\references\conversion-rules.md",
-        ".dsh\skills\knowledge-organize\SKILL.md"
+        ".dsh\skills\knowledge-organize\SKILL.md",
+        ".dsh\skills\knowledge-organize\scripts\organize_batch.py"
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $uiInitializedVault $requiredVaultEntry))) {
             throw "The in-app initialized Vault is missing: $requiredVaultEntry"
