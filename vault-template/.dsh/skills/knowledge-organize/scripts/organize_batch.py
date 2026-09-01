@@ -50,6 +50,12 @@ FRONTMATTER_PATTERN = re.compile(r"\A---\r?\n(?P<yaml>.*?)\r?\n---(?P<body>.*)\Z
 TOP_LEVEL_KEY_PATTERN = re.compile(r"^(?P<key>[A-Za-z_][A-Za-z0-9_-]*):")
 HEADING_PATTERN = re.compile(r"^(?P<marks>#{1,6})\s+(?P<title>.+?)\s*$")
 WIKI_ATTACHMENT_PATTERN = re.compile(r"!\[\[(?P<path>07_Attachments/[^\]|#]+)")
+CARD_REFERENCE_PATTERN = re.compile(r"^C(?P<number>[0-9]+)$", re.IGNORECASE)
+OPERATIONAL_BOUNDARY_PATTERN = re.compile(
+    r"^\s*(?:不要|不得|禁止|严禁|切勿|务必|先|然后|再|接着|最后|点击|输入|打开|选择|保存后|执行后|"
+    r"do\s+not\b|don't\b|never\b|must\b|first\b|then\b|next\b)",
+    re.IGNORECASE,
+)
 
 
 class OrganizeError(RuntimeError):
@@ -242,6 +248,10 @@ def comparison_key(value: object) -> str:
     return re.sub(r"[\W_]+", "", str(value), flags=re.UNICODE).casefold()
 
 
+def compact_text(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
 def normalize_card(card: dict) -> dict:
     """Accept the compact agent contract and preserve legacy manifests."""
 
@@ -251,6 +261,13 @@ def normalize_card(card: dict) -> dict:
     uses = string_list(card.get("use", card.get("use_when")))
     avoids = string_list(card.get("avoid", card.get("do_not_use_when")))
     questions = string_list(card.get("questions", card.get("match_questions")))
+    related_links: list[str] = []
+    related_ids = string_list(card.get("related_ids"))
+    for item in string_list(card.get("related")):
+        if CARD_REFERENCE_PATTERN.fullmatch(item):
+            related_ids.append(item.upper())
+        else:
+            related_links.append(item)
 
     normalized["title"] = title
     normalized["knowledge_kind"] = kind
@@ -259,9 +276,10 @@ def normalize_card(card: dict) -> dict:
     normalized["use_when"] = uses
     normalized["do_not_use_when"] = avoids
     normalized["match_questions"] = questions
-    normalized["includes"] = string_list(card.get("includes")) or ([title] if title else [])
-    normalized["excludes"] = string_list(card.get("excludes")) or avoids
-    normalized["related"] = string_list(card.get("related"))
+    normalized["includes"] = string_list(card.get("includes"))
+    normalized["excludes"] = string_list(card.get("excludes"))
+    normalized["related"] = list(dict.fromkeys(related_links))
+    normalized["related_ids"] = list(dict.fromkeys(related_ids))
     normalized["route_to"] = card.get("route", card.get("route_to"))
     normalized["route_confidence"] = card.get("confidence", card.get("route_confidence"))
     normalized["route_reason"] = card.get("reason", card.get("route_reason"))
@@ -290,7 +308,26 @@ def normalize_manifest(manifest: dict) -> dict:
     normalized = dict(manifest)
     cards = manifest.get("cards")
     if isinstance(cards, list):
-        normalized["cards"] = [normalize_card(card) if isinstance(card, dict) else card for card in cards]
+        normalized_cards = [normalize_card(card) if isinstance(card, dict) else card for card in cards]
+        for index, card in enumerate(normalized_cards):
+            if not isinstance(card, dict):
+                continue
+            reciprocal_id = f"C{index + 1:03d}"
+            for reference in list(card.get("related_ids", [])):
+                match = CARD_REFERENCE_PATTERN.fullmatch(reference)
+                if match is None or reference != f"C{int(match.group('number')):03d}":
+                    continue
+                target_index = int(match.group("number")) - 1
+                if target_index == index or not 0 <= target_index < len(normalized_cards):
+                    continue
+                target = normalized_cards[target_index]
+                if not isinstance(target, dict):
+                    continue
+                target_ids = string_list(target.get("related_ids"))
+                if reciprocal_id not in target_ids:
+                    target_ids.append(reciprocal_id)
+                target["related_ids"] = target_ids
+        normalized["cards"] = normalized_cards
     return normalized
 
 
@@ -433,6 +470,22 @@ def validate_manifest(manifest: dict, vault: Path) -> list[str]:
             value = card.get(key)
             if not isinstance(value, list) or not any(str(item).strip() for item in value):
                 errors.append(f"{prefix}.{key} 必须包含至少一项")
+                continue
+            items = string_list(value)
+            item_keys = [comparison_key(item) for item in items]
+            if len(item_keys) != len(set(item_keys)):
+                errors.append(f"{prefix}.{key} 含重复或仅标点不同的条目")
+            if any("\n" in item or "\r" in item for item in items):
+                errors.append(f"{prefix}.{key} 每一项必须是单行短语")
+        for key in ("use_when", "do_not_use_when"):
+            if any(OPERATIONAL_BOUNDARY_PATTERN.search(item) for item in string_list(card.get(key))):
+                errors.append(f"{prefix}.{key} 只能描述检索场景，不能写操作步骤、命令或警告")
+        aliases = string_list(card.get("aliases"))
+        alias_keys = [comparison_key(item) for item in aliases]
+        if len(alias_keys) != len(set(alias_keys)):
+            errors.append(f"{prefix}.aliases 含重复别名")
+        if title_key and title_key in alias_keys:
+            errors.append(f"{prefix}.aliases 不应重复 title")
         use_keys = {comparison_key(item) for item in string_list(card.get("use_when"))}
         avoid_keys = {comparison_key(item) for item in string_list(card.get("do_not_use_when"))}
         if (use_keys & avoid_keys) - {""}:
@@ -450,6 +503,19 @@ def validate_manifest(manifest: dict, vault: Path) -> list[str]:
                 errors.append(f"{prefix}.match_questions 与 cards[{owner}] 重复，可能不是独立原子卡")
             else:
                 questions[question_key] = index - 1
+        for reference in string_list(card.get("related_ids")):
+            match = CARD_REFERENCE_PATTERN.fullmatch(reference)
+            if match is None:
+                errors.append(f"{prefix}.related 必须使用同批卡片 ID，如 C002")
+                continue
+            target_number = int(match.group("number"))
+            canonical = f"C{target_number:03d}"
+            if reference != canonical:
+                errors.append(f"{prefix}.related 卡片 ID 必须写成 {canonical}")
+            elif target_number == index:
+                errors.append(f"{prefix}.related 不能引用自身")
+            elif not 1 <= target_number <= len(cards):
+                errors.append(f"{prefix}.related 引用了不存在的同批卡片：{reference}")
         for key in ("route_reason",):
             if not str(card.get(key) or "").strip():
                 errors.append(f"{prefix}.{key} 不能为空")
@@ -500,10 +566,26 @@ def validate_manifest(manifest: dict, vault: Path) -> list[str]:
 
 
 def description_for(card: dict) -> str:
-    use = "；".join(str(item).strip() for item in card["use_when"] if str(item).strip())
-    includes = "、".join(str(item).strip() for item in card["includes"] if str(item).strip())
-    excludes = "、".join(str(item).strip() for item in card["excludes"] if str(item).strip())
+    use = "；".join(compact_text(item) for item in card["use_when"] if compact_text(item))
+    includes = "、".join(compact_text(item) for item in card["includes"] if compact_text(item))
+    excludes = "、".join(compact_text(item) for item in card["excludes"] if compact_text(item))
     return f"当用户需要{use}时使用。包含{includes}；不包含{excludes}。"
+
+
+def resolved_related(card: dict, manifest: dict) -> list[str]:
+    related = string_list(card.get("related"))
+    cards = manifest.get("cards", [])
+    for reference in string_list(card.get("related_ids")):
+        match = CARD_REFERENCE_PATTERN.fullmatch(reference)
+        if match is None:
+            continue
+        target_index = int(match.group("number")) - 1
+        if not 0 <= target_index < len(cards) or not isinstance(cards[target_index], dict):
+            continue
+        title = str(cards[target_index].get("title") or "").replace("]", "").replace("|", "-").strip()
+        if title:
+            related.append(f"[[{title}]]")
+    return list(dict.fromkeys(related))
 
 
 def render_card(card: dict, manifest: dict, card_id: str) -> str:
@@ -513,6 +595,7 @@ def render_card(card: dict, manifest: dict, card_id: str) -> str:
     route = str(card["route_to"]).replace("\\", "/").rstrip("/")
     package_title = route.split("/")[-1].split("_", 1)[-1]
     source_title = str(manifest["source"]["title"])
+    related = resolved_related(card, manifest)
     fields: list[str] = [
         "---",
         f"title: {yaml_quote(card['title'])}",
@@ -546,7 +629,7 @@ def render_card(card: dict, manifest: dict, card_id: str) -> str:
             "tags: []",
         ]
     )
-    fields.extend(render_yaml_field("related", card.get("related", [])))
+    fields.extend(render_yaml_field("related", related))
     fields.extend(
         [
             f"organized_run_id: {yaml_quote(manifest['run_id'])}",
@@ -582,7 +665,7 @@ def render_card(card: dict, manifest: dict, card_id: str) -> str:
             f"- 所属索引：[[{route}/_Index|{package_title}]]",
         ]
     )
-    for item in card.get("related", []):
+    for item in related:
         body.append(f"- 相关知识：{item}")
     return "\n".join(fields + [""] + body).rstrip() + "\n"
 
@@ -851,9 +934,12 @@ def prepare_manifest(args: argparse.Namespace) -> int:
     print('"title":"...","kind":"concept|procedure","evidence":["S001"],')
     print('"route":"05_Skills/...","confidence":0.9,"reason":"...",')
     print('"triggers":["..."],"use":["..."],"avoid":["..."],"questions":["..."],')
+    print('"includes":["content in scope"],"excludes":["content outside scope"],')
     print('"conclusion":"...","body":"Markdown details","limits":"..."}]}' )
-    print("QUALITY GATE: silently verify one stable question per card, evidence-supported claims, distinct boundaries, complete retrieval fields, and no duplicate cards before writing.")
-    print("Optional per card: aliases, related. For SOP, kind=procedure; keep one complete workflow, its inputs, ordered steps, parameters, verification, exceptions, and each real image with its step.")
+    print("YAML SEMANTICS: use/avoid are positive/negative retrieval situations, never workflow steps or warnings; includes/excludes are content scope.")
+    print("QUALITY GATE: silently verify one stable question per card, evidence-supported claims, distinct boundaries, complete retrieval fields, no duplicates, and direct same-run relationships.")
+    print('For a direct sibling relation (workflow-exception, concept-application, prerequisite-result), add "related":["C002"]; one direction is enough and apply makes it reciprocal. Do not link merely because cards share keywords.')
+    print("Optional per card: aliases. For SOP, kind=procedure; keep one complete workflow, its inputs, ordered steps, parameters, verification, exceptions, and each real image with its step.")
     print("=== SOURCE WITH EVIDENCE IDS ===")
     print(annotated_source(content, manifest["sections"]))
     print("=== END SOURCE ===")

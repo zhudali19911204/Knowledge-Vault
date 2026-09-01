@@ -723,8 +723,10 @@ try {
             kind = "concept"
             triggers = @("complete row")
             use = @("interpret a populated cost row")
-            avoid = @("repair a missing amount")
+            avoid = @("the amount is missing and requires remediation")
             questions = @("How should a complete cost row be interpreted?")
+            includes = @("complete-row interpretation")
+            excludes = @("missing-amount remediation")
             evidence = @($evidenceId)
             route = "05_Skills/Organize Batch"
             reason = "Reusable interpretation rule"
@@ -732,6 +734,7 @@ try {
             conclusion = "Interpret account, amount, and description together."
             body = "Read all populated columns from the same row. Account 1000 has amount 12.50 and description first row."
             limits = "This card does not reconstruct formulas."
+            related = @("C002")
         },
         [pscustomobject]@{
             title = "Handle Missing Amounts"
@@ -740,6 +743,8 @@ try {
             use = @("review a row whose amount is empty")
             avoid = @("an amount is already present")
             questions = @("What should happen when an amount is missing?")
+            includes = @("missing-amount review")
+            excludes = @("populated-row interpretation")
             evidence = @($evidenceId)
             route = "05_Skills/Organize Batch"
             reason = "Reusable data-quality procedure"
@@ -756,8 +761,14 @@ try {
     )
     $validSecondKind = $organizeCards.cards[1].kind
     $validSecondConclusion = $organizeCards.cards[1].conclusion
+    $validSecondAvoid = @($organizeCards.cards[1].avoid)
+    $validFirstRelated = @($organizeCards.cards[0].related)
+    $validFirstIncludes = @($organizeCards.cards[0].includes)
     $organizeCards.cards[1].kind = "summary"
     $organizeCards.cards[1].conclusion = $organizeCards.cards[0].conclusion
+    $organizeCards.cards[1].avoid = @("Do not continue the workflow")
+    $organizeCards.cards[0].related = @("C999")
+    $organizeCards.cards[0].includes = @()
     [System.IO.File]::WriteAllText(
         $organizeCardsPath,
         ($organizeCards | ConvertTo-Json -Depth 20),
@@ -767,12 +778,18 @@ try {
     if (
         $LASTEXITCODE -eq 0 -or
         ($qualityGateOutput -join "`n") -notmatch 'knowledge_kind' -or
-        ($qualityGateOutput -join "`n") -notmatch 'conclusion'
+        ($qualityGateOutput -join "`n") -notmatch 'conclusion' -or
+        ($qualityGateOutput -join "`n") -notmatch 'related' -or
+        ($qualityGateOutput -join "`n") -notmatch 'do_not_use_when' -or
+        ($qualityGateOutput -join "`n") -notmatch 'includes'
     ) {
         throw "Knowledge organize quality gate accepted an invalid kind or duplicate conclusion."
     }
     $organizeCards.cards[1].kind = $validSecondKind
     $organizeCards.cards[1].conclusion = $validSecondConclusion
+    $organizeCards.cards[1].avoid = $validSecondAvoid
+    $organizeCards.cards[0].related = $validFirstRelated
+    $organizeCards.cards[0].includes = $validFirstIncludes
     [System.IO.File]::WriteAllText(
         $organizeCardsPath,
         ($organizeCards | ConvertTo-Json -Depth 20),
@@ -803,6 +820,16 @@ try {
     if ($organizedSourceText -notmatch 'Interpret Complete Rows' -or $organizedSourceText -notmatch 'Handle Missing Amounts') {
         throw "Knowledge organize did not create source backlinks for every generated card."
     }
+    $firstOrganizedCard = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedCardPaths[0]
+    $secondOrganizedCard = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedCardPaths[1]
+    if (
+        $firstOrganizedCard -notmatch '\[\[Handle Missing Amounts\]\]' -or
+        $secondOrganizedCard -notmatch '\[\[Interpret Complete Rows\]\]' -or
+        $firstOrganizedCard -notmatch 'description: >\r?\n  [^\r\n]*missing-amount remediation' -or
+        $firstOrganizedCard -match 'description: >\r?\n  [^\r\n]*the amount is missing'
+    ) {
+        throw "Knowledge organize did not render reciprocal links or a scope-based description."
+    }
     $organizeNoOpJson = & python $initializedOrganizeScript apply $organizeManifestPath --cards $organizeCardsPath --vault-root $initializedVault
     $organizeNoOp = $organizeNoOpJson | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or $organizeNoOp.status -ne "ok" -or $organizeNoOp.apply_status -ne "no-op") {
@@ -831,6 +858,8 @@ try {
             use = @("review a provisional rule")
             avoid = @("treat a rule as confirmed")
             questions = @("Is the provisional rule reliable?")
+            includes = @("provisional-rule review")
+            excludes = @("confirmed-rule application")
             evidence = @([string]$lowManifest.sections[0].id)
             route = "02_Domains/Provisional Rules"
             reason = "Potential domain rule requiring review"
