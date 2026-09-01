@@ -271,18 +271,20 @@ def convert_excel(source: Path, stager: ImageStager) -> Conversion:
     cached = openpyxl.load_workbook(source, data_only=True, read_only=False, keep_vba=source.suffix.lower() == ".xlsm")
     sections: list[str] = []
     warnings: list[str] = []
+    total_formula_cells = 0
     for sheet in workbook.worksheets:
         cached_sheet = cached[sheet.title]
         rows: list[list[object]] = []
         comments: list[str] = []
+        formulas_without_cached_values: list[str] = []
         for row in sheet.iter_rows(min_row=1, max_row=sheet.max_row, min_col=1, max_col=sheet.max_column):
             values: list[object] = []
             for cell in row:
-                value = cell.value
-                if isinstance(value, str) and value.startswith("="):
-                    cached_value = cached_sheet[cell.coordinate].value
-                    if cached_value is not None and cached_value != value:
-                        value = f"{value} ⟦缓存值: {cached_value}⟧"
+                value = cached_sheet[cell.coordinate].value
+                if cell.data_type == "f" or (isinstance(cell.value, str) and cell.value.startswith("=")):
+                    total_formula_cells += 1
+                    if value is None:
+                        formulas_without_cached_values.append(cell.coordinate)
                 values.append(value)
                 if cell.comment is not None:
                     comments.append(f"{cell.coordinate}: {cell.comment.text}")
@@ -317,10 +319,22 @@ def convert_excel(source: Path, stager: ImageStager) -> Conversion:
             warnings.append(f"工作表“{sheet.title}”含 {len(charts)} 个图表对象；已保留数据，图表样式无法完整转成 Markdown。")
         if getattr(sheet.data_validations, "count", 0):
             warnings.append(f"工作表“{sheet.title}”含数据验证规则，已记录单元格值但未复刻交互规则。")
+        if formulas_without_cached_values:
+            warnings.append(
+                f"工作表“{sheet.title}”有 {len(formulas_without_cached_values)} 个公式单元格没有缓存实际值，"
+                f"Markdown 已留空且未重算：{', '.join(formulas_without_cached_values)}"
+            )
         sections.append("\n".join(content))
     if source.suffix.lower() == ".xlsm":
         warnings.append("源文件包含宏容器；转换过程中未执行宏，Markdown 不保留 VBA 行为。")
-    return Conversion("\n\n".join(sections), warnings, {"sheets": workbook.sheetnames})
+    return Conversion(
+        "\n\n".join(sections),
+        warnings,
+        {
+            "sheets": workbook.sheetnames,
+            "formula_cells": total_formula_cells,
+        },
+    )
 
 
 def relationship_map(package: zipfile.ZipFile, part_name: str) -> dict[str, str]:

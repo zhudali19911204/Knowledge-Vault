@@ -27,7 +27,7 @@ python ".dsh/skills/knowledge-capture/scripts/document_to_markdown.py" --inspect
 1. **原图图文模式（attachments）**：把图片按原出现位置复制到 `07_Attachments/`，在 Markdown 对应位置嵌入，保留图文关系。
 2. **OCR 文本模式（ocr）**：识别图片文字并插入原位置，与其他正文共同形成 Markdown；默认不在正文重复嵌入原图。
 
-检测不到图片时直接转换，不提问。Excel/CSV/TSV 默认完整转换单元格；Excel 中确有嵌入图片时按原图附件处理，不触发上述二选一。用户已明确 `attachments` 或 `ocr` 时不得重复询问。
+检测不到图片时直接转换，不提问。Excel/CSV/TSV 默认完整转换单元格；Excel 只把单元格实际值写入 Markdown，不写入公式表达式，也不重算工作簿。Excel 中确有嵌入图片时按原图附件处理，不触发上述二选一。用户已明确 `attachments` 或 `ocr` 时不得重复询问。
 
 ## 快速执行
 
@@ -57,7 +57,7 @@ python ".dsh/skills/knowledge-capture/scripts/document_to_markdown.py" `
 1. 保留 YAML frontmatter，至少包含标题、时间、来源文件、哈希、格式、转换方式、`type: source`、`status: inbox` 和 `retrieval_priority: low`。
 2. 正文只使用还原结构所需的标题、段落、列表、表格、代码块、引用、分页/幻灯片标识和图片/OCR 块。
 3. 可以修复断行、空白、明显的阅读顺序和标题层级；不得静默删除、总结、改写事实或合并含义不同的重复内容。
-4. 不能可靠转换的公式、图表、批注、动画、宏、复杂版式或受保护内容，写入简短的“转换说明”，不得伪造。
+4. Excel 公式单元格只输出源文件中已缓存的实际值，不输出公式表达式；没有缓存值时留空并在“转换说明”列出对应单元格，不调用 Excel、LibreOffice 或其他工具重算。其他不能可靠转换的公式、图表、批注、动画、宏、复杂版式或受保护内容，也写入简短的“转换说明”，不得伪造。
 5. 不生成“30 秒摘要”“完整知识清单”“建议提炼卡片”等与文件转换无关的固定章节。
 
 各格式的完整性规则和可接受偏差见 [references/conversion-rules.md](references/conversion-rules.md)。只有实际处理相应格式时才读取该参考。

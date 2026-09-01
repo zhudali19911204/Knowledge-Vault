@@ -116,16 +116,21 @@ if ($LASTEXITCODE -ne 0) {
     throw "Knowledge capture converter validation failed with exit code $LASTEXITCODE."
 }
 $captureSkill = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureSkillPath
+$captureScript = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureScriptPath
 $inboxTemplate = Get-Content -Raw -Encoding UTF8 -LiteralPath $inboxTemplatePath
-if (
-    $captureSkill -notmatch '--inspect' -or
-    $captureSkill -notmatch '\battachments\b' -or
-    $captureSkill -notmatch '\bocr\b' -or
-    $captureSkill -notmatch 'document_to_markdown.py' -or
-    $inboxTemplate -notmatch 'source_sha256:' -or
-    $inboxTemplate -notmatch 'conversion_mode:'
-) {
-    throw "Knowledge capture Skill or streamlined Inbox template is not configured for document conversion."
+$captureContractChecks = [ordered]@{
+    "inspect command" = $captureSkill -match '--inspect'
+    "attachments mode" = $captureSkill -match '\battachments\b'
+    "OCR mode" = $captureSkill -match '\bocr\b'
+    "converter command" = $captureSkill -match 'document_to_markdown.py'
+    "cached Excel value implementation" = $captureScript -match 'value = cached_sheet\[cell\.coordinate\]\.value'
+    "legacy formula-plus-cache output removed" = $captureScript -notmatch '⟦缓存值:'
+    "source hash metadata" = $inboxTemplate -match 'source_sha256:'
+    "conversion mode metadata" = $inboxTemplate -match 'conversion_mode:'
+}
+$captureContractFailures = @($captureContractChecks.GetEnumerator() | Where-Object { -not $_.Value } | ForEach-Object { $_.Key })
+if ($captureContractFailures.Count -gt 0) {
+    throw "Knowledge capture conversion contract failed: $($captureContractFailures -join ', ')"
 }
 $organizeSkill = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizeSkillPath
 $vaultAgent = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $vaultTemplateRoot "AGENTS.md")
