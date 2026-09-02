@@ -19,7 +19,7 @@ description: 当用户输入“知识收”并希望把明确提供的 Excel、C
 先运行检测命令：
 
 ```powershell
-python ".dsh/skills/knowledge-capture/scripts/document_to_markdown.py" --inspect "<源文件>"
+python ".dsh/skills/knowledge-capture/scripts/capture.py" --inspect "<源文件>"
 ```
 
 仅当 PDF、Word 或 PowerPoint 含图片、图表、扫描页等图文混排内容时，且用户尚未指定处理方式，询问一次：
@@ -34,7 +34,7 @@ python ".dsh/skills/knowledge-capture/scripts/document_to_markdown.py" --inspect
 用户完成必要选择后，优先一次运行统一脚本，不手工逐页重写：
 
 ```powershell
-python ".dsh/skills/knowledge-capture/scripts/document_to_markdown.py" `
+python ".dsh/skills/knowledge-capture/scripts/capture.py" `
   "<源文件>" `
   --vault-root "." `
   --mode attachments
@@ -48,7 +48,25 @@ python ".dsh/skills/knowledge-capture/scripts/document_to_markdown.py" `
 - 原图模式下创建合规编号的 `07_Attachments/07xx_标题/`；
 - 输出 JSON 清单，供完成前一次性核验。
 
-如果脚本报告缺少依赖，先查看 `scripts/requirements.txt`。安装 Python 包或 OCR 引擎会改变用户环境，必须在执行安装前取得用户许可；不得反复尝试不同转换工具。OCR 引擎不可用且用户不允许安装时，说明阻塞，不得把未识别图片声称为完整文本。
+如果脚本报告缺少依赖，先查看 `scripts/requirements.txt`，并明确告知用户需要下载的包和用途。安装 Python 包或 OCR 引擎会改变用户环境，必须在执行安装前取得用户许可；不得反复尝试不同转换工具。
+
+用户同意安装 Python 依赖后，只使用启动器创建 Harness 专用隔离环境，不得直接执行系统级或 `--user` 级 `pip install`，也不得把包安装到 Vault、临时目录后再拼接 `PYTHONPATH`：
+
+```powershell
+python ".dsh/skills/knowledge-capture/scripts/capture.py" --install-dependencies
+```
+
+该命令把环境写入 `DSH_HOME/runtimes/knowledge-capture/`（默认位于 `%LOCALAPPDATA%/KnowledgeVaultHarness/dsh/runtimes/`），不进入 Vault。Windows 的 `workspace-write` 沙箱首次会拒绝这个 Vault 外写入；看到 `[WinError 5]`、`Access is denied` 或 sandbox denial 后，应在同一轮仅对完全相同的安装命令请求 `sandbox_permissions: danger-full-access`，用一句话说明需要在 Harness 用户数据目录创建隔离依赖环境。用户拒绝权限升级后立即停止，不得改用其他目录规避沙箱。安装耗时较长时使用后台任务并收集最终退出状态，不要让前台 300 秒超时被误判为安装失败。
+
+只有默认包索引确实发生网络或证书错误时，才允许在用户知情后把同一启动器命令改为可信镜像；例如：
+
+```powershell
+python ".dsh/skills/knowledge-capture/scripts/capture.py" `
+  --install-dependencies `
+  --index-url "https://pypi.tuna.tsinghua.edu.cn/simple"
+```
+
+镜像命令如需写入 Vault 外目录，仍按上一段处理一次性权限升级。安装成功后重新运行原来的 `--inspect`，不要继续安装无关包。Tesseract 是 OCR 模式额外需要的系统程序，不包含在 Python 依赖中；OCR 引擎不可用且用户不允许安装时，说明阻塞，不得把未识别图片声称为完整文本。
 
 ## 输出要求
 

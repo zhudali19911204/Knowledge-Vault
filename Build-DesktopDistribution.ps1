@@ -164,6 +164,8 @@ try {
         (Join-Path $deployRoot "node_modules\@deepseek-ai\dsh\lib\bin.js"),
         (Join-Path $deployRoot "node_modules\@knowledge-vault\dsh-bootstrap\package.json"),
         (Join-Path $deployRoot "vault-template\AGENTS.md"),
+        (Join-Path $deployRoot "vault-template\.dsh\skills\knowledge-capture\scripts\capture.py"),
+        (Join-Path $deployRoot "vault-template\.dsh\skills\knowledge-capture\scripts\requirements.txt"),
         (Join-Path $deployRoot ".dsh\plugins\knowledge-vault-bootstrap\client.js"),
         (Join-Path $deployRoot "README.md")
     )
@@ -360,6 +362,8 @@ The executable is not code-signed. Windows SmartScreen may show a warning.
             "Knowledge-Vault-Harness-Portable/resources/app.asar",
             "Knowledge-Vault-Harness-Portable/resources/runtime/node.exe",
             "Knowledge-Vault-Harness-Portable/resources/product/vault-template/AGENTS.md",
+            "Knowledge-Vault-Harness-Portable/resources/product/vault-template/.dsh/skills/knowledge-capture/scripts/capture.py",
+            "Knowledge-Vault-Harness-Portable/resources/product/vault-template/.dsh/skills/knowledge-capture/scripts/requirements.txt",
             "Knowledge-Vault-Harness-Portable/resources/product/node_modules/@deepseek-ai/dsh/package.json",
             "Knowledge-Vault-Harness-Portable/PORTABLE.txt"
         )

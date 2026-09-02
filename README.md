@@ -138,6 +138,7 @@ API 地址、协议和模型 ID 必须与模型服务商文档一致；配置不
 | 应用程序 | 安装时选择的目录，或免安装版解压目录 | 桌面壳、内置 Node.js、固定版 Harness 和产品插件；不要在这里存放正式知识 |
 | 知识正文 | 初始化时选择的 Vault | Markdown、附件、索引、模板和 Obsidian 设置 |
 | Harness 用户数据 | `%LOCALAPPDATA%\KnowledgeVaultHarness` | 模型设置、API 密钥、会话和生成的运行配置 |
+| 知识收 Python 环境 | `%LOCALAPPDATA%\KnowledgeVaultHarness\dsh\runtimes\knowledge-capture` | 经用户同意后按需创建的隔离转换依赖；不写入系统 Python 或 Vault |
 
 备份知识时主要备份自己的 Vault。复制应用目录不会自动备份模型设置和会话，删除应用目录也不会删除外部 Vault。
 
@@ -200,6 +201,26 @@ My-Vault/
 请选择空文件夹；普通非空文件夹不会被覆盖。如果目录已经是 Knowledge Vault，应使用“选择知识库”，并确认根目录含有 `AGENTS.md` 和 `01_Inbox/`。
 
 初始化器会让模板目录继承所选 Vault 根目录的 Windows ACL，使沙箱对 Vault 根目录取得的写权限能够继续传递到 Inbox、知识目录和附件目录。不要单独关闭这些目录的权限继承，否则知识收、知识理和知识联可能出现 `[WinError 5] 拒绝访问`。
+
+### 知识收无法安装 PyMuPDF 等依赖
+
+`pip` 已经下载包、随后在 `%APPDATA%\Python` 或系统 Python 目录报 `[WinError 5]` 时，根因通常是 Harness 的 `workspace-write` 沙箱拒绝写入 Vault 外目录，不是镜像下载失败。不要改用 `pip install --user`、Vault 内 `.venv`、临时目录或 `PYTHONPATH` 绕过。
+
+在对话中同意安装后，Agent 会调用知识收启动器，并单独请求一次写入 Harness 用户数据目录的权限；依赖安装在产品专用隔离环境。也可以在所选 Vault 根目录手动运行：
+
+```powershell
+python ".dsh/skills/knowledge-capture/scripts/capture.py" --install-dependencies
+```
+
+只有默认 Python 包索引确实出现网络或证书错误时，再显式选择可信镜像：
+
+```powershell
+python ".dsh/skills/knowledge-capture/scripts/capture.py" `
+  --install-dependencies `
+  --index-url "https://pypi.tuna.tsinghua.edu.cn/simple"
+```
+
+安装后可用 `python ".dsh/skills/knowledge-capture/scripts/capture.py" --runtime-info` 检查隔离环境。OCR 模式还需要系统安装 Tesseract；它不是 Python 包，不会由此命令安装。
 
 ### 卸载重装后，原知识库已经被删除
 
@@ -272,6 +293,7 @@ My-Vault/
 - 初始化后的 `05_Skills/` 仍是 Obsidian 内的可复用知识；`.dsh/skills/` 是 Agent 运行时说明，两者不混用。
 - `vault-template/.agents/scripts/knowledge_router.py` 是模板中的路由器，初始化后位于用户 Vault 的 `.agents/scripts/`。
 - `vault-template/.dsh/skills/knowledge-organize/scripts/organize_batch.py` 将单篇来源的紧凑卡片 JSON 批量落盘，避免模型逐卡重复读取来源、拼装 YAML 和维护索引。
+- `vault-template/.dsh/skills/knowledge-capture/scripts/capture.py` 在 Harness 用户数据目录管理文档转换专用虚拟环境，统一调用转换器，避免运行时把依赖写入系统 Python 或 Vault。
 - 模型设置、API 密钥、会话和生成的 DSH patch 保存在 `%LOCALAPPDATA%\KnowledgeVaultHarness`，不进入发布包或 Vault。
 
 安装版和免安装版由 Electron 桌面壳承载页面；桌面壳会自动选择空闲的本机端口、启动固定版 Harness，并在退出时关闭该服务。普通用户不需要直接操作 Node.js 或浏览器。
@@ -424,7 +446,7 @@ git commit -m "Initialize knowledge base"
 
 - Windows 10/11 x64；桌面安装版和免安装版已内置 Node.js 与固定版本的 DeepSeek Harness。
 - 从源码运行或构建时需要 Windows PowerShell 5.1+、Node.js 22.19+ 或 24+，并启用 Corepack。
-- Python 3.10+ 仅用于知识路由、巡检和开发自检；普通聊天、目录浏览、图谱和统计不依赖 Python。
+- Python 3.10+ 用于知识收文档转换、知识路由、巡检和开发自检；普通聊天、目录浏览、图谱和统计不依赖 Python。知识收的第三方 Python 包按需安装在 Harness 用户数据目录的隔离环境中。
 - 一个可用的模型 API 密钥及对应的 API 地址、协议和模型 ID；由每位用户单独配置，不随项目分发。
 - Obsidian 为推荐工具，用于手工维护笔记、Properties、Bases 和双向链接；不是启动聊天界面的必要条件。
 

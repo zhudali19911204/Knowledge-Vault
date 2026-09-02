@@ -10,6 +10,7 @@ Set-StrictMode -Version Latest
 $productRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $MyInvocation.MyCommand.Path))
 $vaultTemplateRoot = Join-Path $productRoot "vault-template"
 $captureSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\SKILL.md"
+$captureLauncherPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\scripts\capture.py"
 $captureScriptPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py"
 $captureRulesPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\references\conversion-rules.md"
 $organizeSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-organize\SKILL.md"
@@ -52,6 +53,7 @@ foreach ($path in @(
     $desktopLoadingPath,
     $desktopBuildScript,
     $captureSkillPath,
+    $captureLauncherPath,
     $captureScriptPath,
     $captureRulesPath,
     $organizeSkillPath,
@@ -117,14 +119,29 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "Knowledge capture converter validation failed with exit code $LASTEXITCODE."
 }
+$captureRuntimeProbe = Join-Path ([System.IO.Path]::GetTempPath()) ("KnowledgeVaultHarness-capture-probe-" + [guid]::NewGuid().ToString("N"))
+$captureRuntimeInfo = (& python $captureLauncherPath --runtime-info --runtime-root $captureRuntimeProbe | Out-String) | ConvertFrom-Json
+if (
+    $LASTEXITCODE -ne 0 -or
+    $captureRuntimeInfo.ready -ne $false -or
+    -not [string]::Equals([string]$captureRuntimeInfo.runtime_root, $captureRuntimeProbe, [System.StringComparison]::OrdinalIgnoreCase) -or
+    (Test-Path -LiteralPath $captureRuntimeProbe)
+) {
+    throw "Knowledge capture launcher did not inspect an isolated runtime without mutating it."
+}
 $captureSkill = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureSkillPath
+$captureLauncher = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureLauncherPath
 $captureScript = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureScriptPath
 $inboxTemplate = Get-Content -Raw -Encoding UTF8 -LiteralPath $inboxTemplatePath
 $captureContractChecks = [ordered]@{
     "inspect command" = $captureSkill -match '--inspect'
     "attachments mode" = $captureSkill -match '\battachments\b'
     "OCR mode" = $captureSkill -match '\bocr\b'
-    "converter command" = $captureSkill -match 'document_to_markdown.py'
+    "isolated launcher command" = $captureSkill -match 'scripts/capture\.py'
+    "isolated dependency installer" = $captureSkill -match '--install-dependencies'
+    "sandbox escalation guidance" = $captureSkill -match 'sandbox_permissions: danger-full-access'
+    "launcher virtual environment" = $captureLauncher -match 'venv\.EnvBuilder'
+    "launcher runtime outside Vault" = $captureLauncher -match 'DSH_HOME'
     "cached Excel value implementation" = $captureScript -match 'value = cached_sheet\[cell\.coordinate\]\.value'
     "legacy formula-plus-cache output removed" = $captureScript -notmatch '⟦缓存值:'
     "source hash metadata" = $inboxTemplate -match 'source_sha256:'
@@ -627,6 +644,7 @@ try {
         "01_Inbox",
         "07_Attachments",
         ".dsh\skills",
+        ".dsh\skills\knowledge-capture\scripts\capture.py",
         ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
         ".dsh\skills\knowledge-capture\references\conversion-rules.md",
         ".dsh\skills\knowledge-organize\SKILL.md",
@@ -650,10 +668,11 @@ try {
         [System.Text.UTF8Encoding]::new($false)
     )
     $captureHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $captureFixturePath).Hash
-    $initializedCaptureScript = Join-Path $initializedVault ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py"
+    $initializedCaptureScript = Join-Path $initializedVault ".dsh\skills\knowledge-capture\scripts\capture.py"
     $captureManifestJson = & python `
         $initializedCaptureScript `
         $captureFixturePath `
+        --runtime-root (Join-Path $runtimeRoot "capture-runtime") `
         --vault-root $initializedVault `
         --mode text `
         --title "Capture CSV Fixture"
@@ -1308,6 +1327,7 @@ try {
         "01_Inbox",
         "07_Attachments",
         ".dsh\skills",
+        ".dsh\skills\knowledge-capture\scripts\capture.py",
         ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
         ".dsh\skills\knowledge-capture\references\conversion-rules.md",
         ".dsh\skills\knowledge-organize\SKILL.md",

@@ -26,4 +26,4 @@
 
 ## 安全
 
-DeepSeek API 密钥只在 dsh 的“设置 → 模型”中配置。默认 DSH HOME 为 `%LOCALAPPDATA%\KnowledgeVaultHarness\dsh`，生成的补丁位于相邻的 `generated/` 目录。不要把这些用户数据、密钥或会话复制回本目录或放入发布包。
+DeepSeek API 密钥只在 dsh 的“设置 → 模型”中配置。默认 DSH HOME 为 `%LOCALAPPDATA%\KnowledgeVaultHarness\dsh`，生成的补丁位于相邻的 `generated/` 目录；经用户许可安装的知识收 Python 隔离环境位于 DSH HOME 下的 `runtimes/knowledge-capture/`。不要把这些用户数据、密钥、会话或运行环境复制回本目录或放入发布包。

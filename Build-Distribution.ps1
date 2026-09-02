@@ -103,6 +103,8 @@ try {
             "Knowledge-Vault-Harness/vault-template/01_Inbox/_Inbox 使用说明.md",
             "Knowledge-Vault-Harness/vault-template/.agents/scripts/knowledge_router.py",
             "Knowledge-Vault-Harness/vault-template/.dsh/skills/vault-retrieve/SKILL.md",
+            "Knowledge-Vault-Harness/vault-template/.dsh/skills/knowledge-capture/scripts/capture.py",
+            "Knowledge-Vault-Harness/vault-template/.dsh/skills/knowledge-capture/scripts/requirements.txt",
             "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/index.js",
             "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/client.js",
             "Knowledge-Vault-Harness/.dsh/plugins/knowledge-vault-bootstrap/graph-worker.js",
