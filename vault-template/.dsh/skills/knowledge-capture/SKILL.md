@@ -25,9 +25,9 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" --inspect "<源文件>
 仅当 PDF、Word 或 PowerPoint 含图片、图表、扫描页等图文混排内容时，且用户尚未指定处理方式，询问一次：
 
 1. **原图图文模式（attachments）**：把图片按原出现位置复制到 `07_Attachments/`，在 Markdown 对应位置嵌入，保留图文关系。
-2. **OCR 文本模式（ocr）**：识别图片文字并插入原位置，与其他正文共同形成 Markdown；默认不在正文重复嵌入原图。
+2. **多模态识别模式（multimodal）**：把临时图片作为原生图片输入提交给当前会话的模型服务商，由支持图片输入的大模型读取，并在原位置插入忠实的文字、表格、图表或示意关系识别结果；默认不在正文重复嵌入原图。
 
-检测不到图片时直接转换，不提问。Excel/CSV/TSV 默认完整转换单元格；Excel 只把单元格实际值写入 Markdown，不写入公式表达式，也不重算工作簿。Excel 中确有嵌入图片时按原图附件处理，不触发上述二选一。用户已明确 `attachments` 或 `ocr` 时不得重复询问。
+检测不到图片时直接转换，不提问。Excel/CSV/TSV 默认完整转换单元格；Excel 只把单元格实际值写入 Markdown，不写入公式表达式，也不重算工作簿。Excel 中确有嵌入图片时按原图附件处理，不触发上述二选一。用户已明确 `attachments` 或 `multimodal` 时不得重复询问。
 
 ## 快速执行
 
@@ -40,7 +40,7 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
   --mode attachments
 ```
 
-无图片时使用 `--mode text`；OCR 模式使用 `--mode ocr`。脚本会：
+无图片时使用 `--mode text`。脚本会：
 
 - 计算 SHA-256，记录源文件大小和修改时间；
 - 按源文档顺序提取正文、表格、页/幻灯片结构和图片锚点；
@@ -48,7 +48,38 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 - 原图模式下创建合规编号的 `07_Attachments/07xx_标题/`；
 - 输出 JSON 清单，供完成前一次性核验。
 
-如果脚本报告缺少依赖，先查看 `scripts/requirements.txt`，并明确告知用户需要下载的包和用途。安装 Python 包或 OCR 引擎会改变用户环境，必须在执行安装前取得用户许可；不得反复尝试不同转换工具。
+### 多模态识别
+
+多模态模式不调用任何本地或外部 OCR 引擎，也不安装 Tesseract。固定执行以下流程：
+
+1. **准备一次**：
+
+   ```powershell
+   python ".dsh/skills/knowledge-capture/scripts/capture.py" `
+     "<源文件>" `
+     --vault-root "." `
+     --mode multimodal
+   ```
+
+   返回 `status: needs_multimodal` 时，记录 `manifest`、尚不存在的 `results_file` 及图片清单。此时尚未写入 Inbox；图片只存在于系统临时任务目录。
+
+2. **逐图读取、一次写结果**：仅对清单中 `model_readable: true` 的每个 `path` 调用 `read_image`，按原顺序识别全部可见信息。文字要忠实转写；表格要保留行列；图表要记录标题、轴、图例、数值和可直接观察的关系；流程图或示意图要保留节点与连接。不得补全看不清的文字、数值或关系。识别完成后按 `results_contract` 一次创建 `results_file`，每项写入对应 `id`、`markdown`、`confidence` 和实际存在的 `uncertainties`，不得先读或覆盖该文件。
+
+   如果 `read_image` 报告当前模型不支持图片输入，立即停止并请用户切换到支持图片的多模态模型；不得退回 OCR、Tesseract、其他识别程序或网页服务。模型读取失败或低置信时，在结果中明确写 `[多模态模型未能可靠识别]` 或具体不确定项，不得猜测。
+
+3. **一次应用并清理**：
+
+   ```powershell
+   python ".dsh/skills/knowledge-capture/scripts/capture.py" `
+     --apply-multimodal "<manifest>" `
+     --results "<results_file>" `
+     --vault-root "." `
+     --cleanup
+   ```
+
+   脚本会校验来源哈希、临时图片、结果 ID、置信度和占位符，验证通过后才原子写入 Inbox 并删除临时任务目录。校验失败时只修正 `results_file` 后重试应用，最多两次；不得直接编辑草稿或跳过未识别图片。
+
+如果脚本报告缺少依赖，先查看 `scripts/requirements.txt`，并明确告知用户需要下载的包和用途。安装 Python 包会改变用户环境，必须在执行安装前取得用户许可；不得反复尝试不同转换工具。
 
 用户同意安装 Python 依赖后，只使用启动器创建 Harness 专用隔离环境，不得直接执行系统级或 `--user` 级 `pip install`，也不得把包安装到 Vault、临时目录后再拼接 `PYTHONPATH`：
 
@@ -66,14 +97,14 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
   --index-url "https://pypi.tuna.tsinghua.edu.cn/simple"
 ```
 
-镜像命令如需写入 Vault 外目录，仍按上一段处理一次性权限升级。安装成功后重新运行原来的 `--inspect`，不要继续安装无关包。Tesseract 是 OCR 模式额外需要的系统程序，不包含在 Python 依赖中；OCR 引擎不可用且用户不允许安装时，说明阻塞，不得把未识别图片声称为完整文本。
+镜像命令如需写入 Vault 外目录，仍按上一段处理一次性权限升级。安装成功后重新运行原来的 `--inspect`，不要继续安装无关包。图片理解只使用当前会话的多模态模型，不属于 Python 依赖安装范围。
 
 ## 输出要求
 
 使用 `05_Skills/0501_Knowledge Management/050101_Templates/Inbox 收集模板.md` 的精简结构：
 
 1. 保留 YAML frontmatter，至少包含标题、时间、来源文件、哈希、格式、转换方式、`type: source`、`status: inbox` 和 `retrieval_priority: low`。
-2. 正文只使用还原结构所需的标题、段落、列表、表格、代码块、引用、分页/幻灯片标识和图片/OCR 块。
+2. 正文只使用还原结构所需的标题、段落、列表、表格、代码块、引用、分页/幻灯片标识、原图或多模态识别块。
 3. 可以修复断行、空白、明显的阅读顺序和标题层级；不得静默删除、总结、改写事实或合并含义不同的重复内容。
 4. Excel 公式单元格只输出源文件中已缓存的实际值，不输出公式表达式；没有缓存值时留空并在“转换说明”列出对应单元格，不调用 Excel、LibreOffice 或其他工具重算。其他不能可靠转换的公式、图表、批注、动画、宏、复杂版式或受保护内容，也写入简短的“转换说明”，不得伪造。
 5. 不生成“30 秒摘要”“完整知识清单”“建议提炼卡片”等与文件转换无关的固定章节。
@@ -86,7 +117,7 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 2. Markdown 文件实际存在，YAML 可解析，正文不是空文档。
 3. 表格未被静默抽样；页、幻灯片、工作表顺序与源文件一致。
 4. 原图模式下，每个图片引用都能解析到 `07_Attachments/` 中的实际文件，位置说明与源文档一致。
-5. OCR 模式下，识别失败或低置信内容有明确标记，没有把猜测写成原文。
+5. 多模态模式下，所有可读图片都有对应结果；识别失败、不可读格式或低置信内容有明确标记，没有把猜测写成原文。
 6. 报告 Markdown 路径、附件目录、转换方式及所有保真偏差。
 
 ## 安全底线

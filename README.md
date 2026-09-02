@@ -112,7 +112,7 @@ API 地址、协议和模型 ID 必须与模型服务商文档一致；配置不
 知识收 attachments D:\资料\项目说明.docx
 ```
 
-也可以指定 `ocr`；未指定时，Agent 检测到图文混排后会询问一次。外部资料默认只读；Agent 只处理你明确指定的文件。完整指令说明见[四个 AI 指令](#四个-ai-指令)。
+也可以指定 `multimodal`，由当前支持图片输入的大模型识别图片中的文字、表格、图表和示意关系；未指定时，Agent 检测到图文混排后会询问一次。外部资料默认只读；Agent 只处理你明确指定的文件。完整指令说明见[四个 AI 指令](#四个-ai-指令)。
 
 ## 界面速览
 
@@ -220,7 +220,7 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
   --index-url "https://pypi.tuna.tsinghua.edu.cn/simple"
 ```
 
-安装后可用 `python ".dsh/skills/knowledge-capture/scripts/capture.py" --runtime-info` 检查隔离环境。OCR 模式还需要系统安装 Tesseract；它不是 Python 包，不会由此命令安装。
+安装后可用 `python ".dsh/skills/knowledge-capture/scripts/capture.py" --runtime-info` 检查隔离环境。图片识别由当前会话的多模态模型完成，不安装也不调用 Tesseract；当前模型不支持图片输入时，需要先切换模型。
 
 ### 卸载重装后，原知识库已经被删除
 
@@ -272,7 +272,7 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 | `知识联` | 修正检索边界、补链接、更新索引 | 可检索的知识关系 |
 | `知识巡` | 只读检查知识库健康度 | 巡检报告与建议 |
 
-`知识收` 不再选择精简/保真；PDF、Word、PowerPoint 检测到图文混排时，只询问保留原图附件还是 OCR 图片文字。`知识理` 同样不再询问精简/保真，只提供两个选择：
+`知识收` 不再选择精简/保真；PDF、Word、PowerPoint 检测到图文混排时，只询问保留原图附件还是由多模态大模型识别图片。多模态模式通过 Harness 的 `read_image` 把临时图片作为原生图片输入交给当前模型，识别结果全部通过校验后才写入 Inbox；不使用 Tesseract 或其他 OCR 引擎。`知识理` 同样不再询问精简/保真，只提供两个选择：
 
 - `用户自定义（custom）`：用户填写每篇来源要创建的卡片数量，以及每张卡片的标题或核心内容。
 - `AI 推荐（recommend）`：大模型根据来源内容确定卡片数量与内容并直接执行。

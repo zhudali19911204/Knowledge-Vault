@@ -12,6 +12,7 @@ $vaultTemplateRoot = Join-Path $productRoot "vault-template"
 $captureSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\SKILL.md"
 $captureLauncherPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\scripts\capture.py"
 $captureScriptPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py"
+$captureRequirementsPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\scripts\requirements.txt"
 $captureRulesPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-capture\references\conversion-rules.md"
 $organizeSkillPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-organize\SKILL.md"
 $organizeScriptPath = Join-Path $vaultTemplateRoot ".dsh\skills\knowledge-organize\scripts\organize_batch.py"
@@ -55,6 +56,7 @@ foreach ($path in @(
     $captureSkillPath,
     $captureLauncherPath,
     $captureScriptPath,
+    $captureRequirementsPath,
     $captureRulesPath,
     $organizeSkillPath,
     $organizeScriptPath,
@@ -132,11 +134,14 @@ if (
 $captureSkill = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureSkillPath
 $captureLauncher = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureLauncherPath
 $captureScript = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureScriptPath
+$captureRequirements = Get-Content -Raw -Encoding UTF8 -LiteralPath $captureRequirementsPath
 $inboxTemplate = Get-Content -Raw -Encoding UTF8 -LiteralPath $inboxTemplatePath
 $captureContractChecks = [ordered]@{
     "inspect command" = $captureSkill -match '--inspect'
     "attachments mode" = $captureSkill -match '\battachments\b'
-    "OCR mode" = $captureSkill -match '\bocr\b'
+    "multimodal mode" = $captureSkill -match '\bmultimodal\b'
+    "read image workflow" = $captureSkill -match '\bread_image\b'
+    "Tesseract implementation removed" = ($captureScript + $captureRequirements) -notmatch '(?i)pytesseract|tesseract|\bocr\b'
     "isolated launcher command" = $captureSkill -match 'scripts/capture\.py'
     "isolated dependency installer" = $captureSkill -match '--install-dependencies'
     "sandbox escalation guidance" = $captureSkill -match 'sandbox_permissions: danger-full-access'
@@ -646,6 +651,7 @@ try {
         ".dsh\skills",
         ".dsh\skills\knowledge-capture\scripts\capture.py",
         ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
+        ".dsh\skills\knowledge-capture\scripts\requirements.txt",
         ".dsh\skills\knowledge-capture\references\conversion-rules.md",
         ".dsh\skills\knowledge-organize\SKILL.md",
         ".dsh\skills\knowledge-organize\scripts\organize_batch.py",
@@ -693,6 +699,128 @@ try {
     ) {
         throw "The bundled knowledge-capture converter did not preserve the CSV source in a streamlined Inbox note."
     }
+
+    Write-Host "Testing multimodal knowledge capture staging and apply..."
+    Add-Type -AssemblyName System.IO.Compression
+    $multimodalFixturePath = Join-Path $smokeRoot "capture-multimodal.docx"
+    $multimodalStream = [System.IO.File]::Open($multimodalFixturePath, [System.IO.FileMode]::CreateNew)
+    $multimodalArchive = [System.IO.Compression.ZipArchive]::new(
+        $multimodalStream,
+        [System.IO.Compression.ZipArchiveMode]::Create,
+        $false
+    )
+    try {
+        $documentXml = @'
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><w:body><w:p><w:r><w:t>Paragraph before image.</w:t></w:r><w:r><w:drawing><a:blip r:embed="rId1"/></w:drawing></w:r></w:p></w:body></w:document>
+'@
+        $relationshipsXml = @'
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>
+'@
+        $multimodalEntries = [ordered]@{
+            "word/document.xml" = [System.Text.UTF8Encoding]::new($false).GetBytes($documentXml)
+            "word/_rels/document.xml.rels" = [System.Text.UTF8Encoding]::new($false).GetBytes($relationshipsXml)
+            "word/media/image1.png" = [Convert]::FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+        }
+        foreach ($entryValue in $multimodalEntries.GetEnumerator()) {
+            $entry = $multimodalArchive.CreateEntry([string]$entryValue.Key)
+            $entryStream = $entry.Open()
+            try {
+                $bytes = [byte[]]$entryValue.Value
+                $entryStream.Write($bytes, 0, $bytes.Length)
+            }
+            finally {
+                $entryStream.Dispose()
+            }
+        }
+    }
+    finally {
+        $multimodalArchive.Dispose()
+        $multimodalStream.Dispose()
+    }
+    $multimodalHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $multimodalFixturePath).Hash
+    $inboxCountBeforeMultimodal = @(Get-ChildItem -LiteralPath (Join-Path $initializedVault "01_Inbox") -File).Count
+    $multimodalPrepareJson = & python `
+        $initializedCaptureScript `
+        $multimodalFixturePath `
+        --runtime-root (Join-Path $runtimeRoot "capture-runtime") `
+        --vault-root $initializedVault `
+        --mode multimodal `
+        --title "Capture Multimodal Fixture"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Knowledge capture multimodal prepare failed with exit code $LASTEXITCODE."
+    }
+    $multimodalPrepare = $multimodalPrepareJson | ConvertFrom-Json
+    $multimodalJobRoot = Split-Path -Parent ([string]$multimodalPrepare.manifest)
+    if (
+        $multimodalPrepare.status -ne "needs_multimodal" -or
+        $multimodalPrepare.images_to_read -ne 1 -or
+        -not (Test-Path -LiteralPath ([string]$multimodalPrepare.images[0].path) -PathType Leaf) -or
+        (Test-Path -LiteralPath ([string]$multimodalPrepare.results_file) -PathType Leaf) -or
+        @(Get-ChildItem -LiteralPath (Join-Path $initializedVault "01_Inbox") -File).Count -ne $inboxCountBeforeMultimodal
+    ) {
+        throw "Knowledge capture multimodal prepare did not create an isolated pending job."
+    }
+    $inboxCountBeforeRejectedApply = @(Get-ChildItem -LiteralPath (Join-Path $initializedVault "01_Inbox") -File -Filter "*.md").Count
+    [System.IO.File]::WriteAllText(
+        [string]$multimodalPrepare.results_file,
+        '{"images":[]}' + "`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $savedErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        & python `
+            $initializedCaptureScript `
+            --vault-root $initializedVault `
+            --apply-multimodal ([string]$multimodalPrepare.manifest) `
+            --results ([string]$multimodalPrepare.results_file) 2>&1 | Out-Null
+        $rejectedApplyExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $savedErrorActionPreference
+    }
+    if (
+        $rejectedApplyExitCode -eq 0 -or
+        $inboxCountBeforeRejectedApply -ne @(Get-ChildItem -LiteralPath (Join-Path $initializedVault "01_Inbox") -File -Filter "*.md").Count
+    ) {
+        throw "Knowledge capture multimodal apply accepted incomplete image results."
+    }
+    $multimodalResults = [ordered]@{ images = @([ordered]@{
+        id = [string]$multimodalPrepare.images[0].id
+        markdown = "Visible label 42"
+        confidence = "high"
+        uncertainties = @()
+    }) }
+    [System.IO.File]::WriteAllText(
+        [string]$multimodalPrepare.results_file,
+        ($multimodalResults | ConvertTo-Json -Depth 6) + "`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $multimodalApplyJson = & python `
+        $initializedCaptureScript `
+        --runtime-root (Join-Path $runtimeRoot "capture-runtime") `
+        --apply-multimodal ([string]$multimodalPrepare.manifest) `
+        --results ([string]$multimodalPrepare.results_file) `
+        --vault-root $initializedVault `
+        --cleanup
+    if ($LASTEXITCODE -ne 0) {
+        throw "Knowledge capture multimodal apply failed with exit code $LASTEXITCODE."
+    }
+    $multimodalApply = $multimodalApplyJson | ConvertFrom-Json
+    $multimodalNote = Get-Content -Raw -Encoding UTF8 -LiteralPath ([string]$multimodalApply.markdown)
+    if (
+        $multimodalApply.status -ne "ok" -or
+        $multimodalApply.images_recognized -ne 1 -or
+        $multimodalApply.temporary_files_removed -ne $true -or
+        $multimodalNote -notmatch 'conversion_mode: multimodal' -or
+        $multimodalNote -notmatch 'Visible label 42' -or
+        $multimodalNote -match 'knowledge-capture-multimodal:' -or
+        (Test-Path -LiteralPath $multimodalJobRoot) -or
+        $multimodalHashBefore -ne (Get-FileHash -Algorithm SHA256 -LiteralPath $multimodalFixturePath).Hash
+    ) {
+        throw "Knowledge capture multimodal apply did not validate and finalize the model result."
+    }
+    Remove-Item -LiteralPath ([string]$multimodalApply.markdown) -Force
 
     Write-Host "Testing manifest-based knowledge organization..."
     $initializedOrganizeScript = Join-Path $initializedVault ".dsh\skills\knowledge-organize\scripts\organize_batch.py"
@@ -1329,6 +1457,7 @@ try {
         ".dsh\skills",
         ".dsh\skills\knowledge-capture\scripts\capture.py",
         ".dsh\skills\knowledge-capture\scripts\document_to_markdown.py",
+        ".dsh\skills\knowledge-capture\scripts\requirements.txt",
         ".dsh\skills\knowledge-capture\references\conversion-rules.md",
         ".dsh\skills\knowledge-organize\SKILL.md",
         ".dsh\skills\knowledge-organize\scripts\organize_batch.py"

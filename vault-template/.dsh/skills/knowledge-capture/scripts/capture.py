@@ -30,7 +30,6 @@ REQUIRED_MODULES = {
     "PIL": "Pillow",
     "pptx": "python-pptx",
     "fitz": "PyMuPDF",
-    "pytesseract": "pytesseract",
 }
 
 

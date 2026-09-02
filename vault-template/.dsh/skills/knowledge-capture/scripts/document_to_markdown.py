@@ -32,6 +32,9 @@ SUPPORTED = {".xlsx", ".xlsm", ".csv", ".tsv", ".pdf", ".docx", ".pptx"}
 LEGACY = {".xls", ".doc", ".ppt"}
 MIXED_LAYOUT = {".pdf", ".docx", ".pptx"}
 INVALID_FILENAME = re.compile(r'[\\/:*?"<>|]+')
+MULTIMODAL_SCHEMA_VERSION = "knowledge-capture-multimodal/v1"
+MULTIMODAL_PLACEHOLDER = "knowledge-capture-multimodal"
+MODEL_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -50,11 +53,13 @@ class DependencyError(ConversionError):
 
 @dataclass
 class ImageRecord:
+    identifier: str
     source: Path
     filename: str
     vault_path: str
     location: str
-    ocr_text: str | None = None
+    model_readable: bool = True
+    unreadable_reason: str | None = None
 
 
 @dataclass
@@ -197,15 +202,14 @@ class ImageStager:
         destination: Path,
         destination_name: str,
         mode: str,
-        ocr_language: str,
     ) -> None:
         self.temp_root = temp_root
         self.destination = destination
         self.destination_name = destination_name
         self.mode = mode
-        self.ocr_language = ocr_language
         self.records: list[ImageRecord] = []
         self.used_names: set[str] = set()
+        self.warnings: list[str] = []
 
     def _allocate_name(self, label: str, extension: str) -> str:
         base = safe_name(label, f"图片-{len(self.records) + 1:03d}", 70)
@@ -222,29 +226,44 @@ class ImageStager:
         self.used_names.add(candidate.lower())
         return candidate
 
-    def _ocr(self, image_path: Path) -> str:
-        if not module_available("PIL") or not module_available("pytesseract"):
-            raise DependencyError("OCR 模式需要 Pillow 与 pytesseract；请按 scripts/requirements.txt 安装。")
-        if shutil.which("tesseract") is None:
-            raise DependencyError("OCR 模式需要系统 Tesseract OCR 引擎，并且 tesseract 必须位于 PATH。")
-        from PIL import Image
-        import pytesseract
+    def _model_image(self, data: bytes, extension: str) -> tuple[bytes, str, bool, str | None]:
+        normalized = extension.lower()
+        if not normalized.startswith("."):
+            normalized = "." + normalized
+        if normalized == ".jpeg":
+            normalized = ".jpg"
+        if normalized in MODEL_IMAGE_EXTENSIONS:
+            return data, normalized, True, None
+        if not module_available("PIL"):
+            return data, normalized, False, "缺少 Pillow，无法把该图片转换为模型支持的格式"
+        try:
+            from PIL import Image
 
-        with Image.open(image_path) as image:
-            text = pytesseract.image_to_string(image, lang=self.ocr_language).strip()
-        return text or "[OCR 未能可靠识别]"
+            with Image.open(io.BytesIO(data)) as image:
+                image.seek(0)
+                converted = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+                output = io.BytesIO()
+                converted.save(output, format="PNG")
+            return output.getvalue(), ".png", True, None
+        except Exception as error:
+            return data, normalized, False, f"无法转换为 PNG：{error}"
 
     def add(self, data: bytes, extension: str, label: str, location: str) -> str:
+        model_readable = True
+        unreadable_reason = None
+        if self.mode == "multimodal":
+            data, extension, model_readable, unreadable_reason = self._model_image(data, extension)
         filename = self._allocate_name(label, extension)
         staged = self.temp_root / filename
         staged.write_bytes(data)
         vault_path = f"07_Attachments/{self.destination_name}/{filename}"
-        record = ImageRecord(staged, filename, vault_path, location)
+        identifier = f"I{len(self.records) + 1:03d}"
+        record = ImageRecord(identifier, staged, filename, vault_path, location, model_readable, unreadable_reason)
         self.records.append(record)
-        if self.mode == "ocr":
-            record.ocr_text = self._ocr(staged)
-            quoted = "\n".join(f"> {line}" if line else ">" for line in record.ocr_text.splitlines())
-            return f"> **[图片 OCR · {location}]**\n>\n{quoted}"
+        if self.mode == "multimodal":
+            if not model_readable:
+                self.warnings.append(f"{location} 的图片无法交给多模态模型：{unreadable_reason}。")
+            return f"<!-- {MULTIMODAL_PLACEHOLDER}:{identifier} -->"
         return f"![[{vault_path}]]\n\n_图片位置：{location}_"
 
 
@@ -522,7 +541,7 @@ def convert_pdf(source: Path, stager: ImageStager) -> Conversion:
                     extension = "." + str(block.get("ext") or "png")
                     content.append(stager.add(block["image"], extension, f"第-{page_number}-页-图片-{block_index}", f"第 {page_number} 页·图片块 {block_index}"))
                     found_content = True
-            if not found_content and stager.mode in {"attachments", "ocr"}:
+            if not found_content and stager.mode in {"attachments", "multimodal"}:
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
                 content.append(stager.add(pixmap.tobytes("png"), ".png", f"第-{page_number}-页", f"第 {page_number} 页·整页扫描"))
             pages.append("\n\n".join(content))
@@ -615,12 +634,12 @@ def validate_vault(path_value: str | None) -> Path:
     return vault
 
 
-def run_conversion(source: Path, vault: Path, mode: str, title_value: str | None, ocr_language: str) -> dict:
+def run_conversion(source: Path, vault: Path, mode: str, title_value: str | None) -> dict:
     inspection = inspect_source(source)
     if inspection["missing_dependencies"]:
         raise DependencyError("缺少转换依赖：" + ", ".join(inspection["missing_dependencies"]))
     if inspection["requires_image_mode"] and mode == "text":
-        raise ConversionError("检测到图文混排；请先让用户选择 --mode attachments 或 --mode ocr。")
+        raise ConversionError("检测到图文混排；请先让用户选择 --mode attachments 或 --mode multimodal。")
     if source.suffix.lower() in {".xlsx", ".xlsm"} and int(inspection["image_count"] or 0) > 0 and mode == "text":
         mode = "attachments"
     title = safe_name(title_value or source.stem)
@@ -631,8 +650,9 @@ def run_conversion(source: Path, vault: Path, mode: str, title_value: str | None
     before_hash = inspection["sha256"]
     copied: list[Path] = []
     with tempfile.TemporaryDirectory(prefix="knowledge-capture-") as temp_value:
-        stager = ImageStager(Path(temp_value), attachment_dir, attachment_name, mode, ocr_language)
+        stager = ImageStager(Path(temp_value), attachment_dir, attachment_name, mode)
         conversion = convert_source(source, stager)
+        conversion.warnings.extend(stager.warnings)
         after_stat = source.stat()
         after_hash = sha256_file(source)
         if before_stat.st_size != after_stat.st_size or before_stat.st_mtime_ns != after_stat.st_mtime_ns or before_hash != after_hash:
@@ -666,25 +686,293 @@ def run_conversion(source: Path, vault: Path, mode: str, title_value: str | None
     }
 
 
+def write_atomic(path: Path, content: str) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(content, encoding="utf-8", newline="\n")
+    os.replace(temporary, path)
+
+
+def source_is_unchanged(source: Path, expected: dict) -> bool:
+    stat = source.stat()
+    return bool(
+        stat.st_size == expected.get("bytes")
+        and stat.st_mtime_ns == expected.get("modified_ns")
+        and sha256_file(source) == expected.get("sha256")
+    )
+
+
+def prepare_multimodal(source: Path, vault: Path, title_value: str | None) -> dict:
+    inspection = inspect_source(source)
+    if inspection["missing_dependencies"]:
+        raise DependencyError("缺少转换依赖：" + ", ".join(inspection["missing_dependencies"]))
+    if source.suffix.lower() not in MIXED_LAYOUT or not inspection["requires_image_mode"]:
+        fallback_mode = "attachments" if source.suffix.lower() in {".xlsx", ".xlsm"} and inspection["image_count"] else "text"
+        return run_conversion(source, vault, fallback_mode, title_value)
+
+    title = safe_name(title_value or source.stem)
+    inbox_name = f"{datetime.now().strftime('%Y-%m-%d %H%M')} - {title}.md"
+    inbox_path = unique_path(vault / "01_Inbox" / inbox_name)
+    before = source.stat()
+    source_state = {
+        "path": str(source),
+        "bytes": before.st_size,
+        "modified_ns": before.st_mtime_ns,
+        "sha256": inspection["sha256"],
+    }
+    job_root = Path(tempfile.mkdtemp(prefix="knowledge-capture-multimodal-"))
+    try:
+        image_root = job_root / "images"
+        image_root.mkdir()
+        stager = ImageStager(image_root, image_root, "", "multimodal")
+        conversion = convert_source(source, stager)
+        conversion.warnings.extend(stager.warnings)
+        if not source_is_unchanged(source, source_state):
+            raise ConversionError("源文件在多模态准备过程中发生变化，已停止处理。")
+        if not stager.records:
+            shutil.rmtree(job_root)
+            return run_conversion(source, vault, "text", title_value)
+
+        draft_path = job_root / "draft.md"
+        results_path = job_root / "results.json"
+        manifest_path = job_root / "manifest.json"
+        draft = build_note(source, title, "multimodal", source_state["sha256"], conversion)
+        write_atomic(draft_path, draft)
+        images = [
+            {
+                "id": record.identifier,
+                "path": str(record.source),
+                "sha256": sha256_file(record.source),
+                "location": record.location,
+                "model_readable": record.model_readable,
+                "unreadable_reason": record.unreadable_reason,
+            }
+            for record in stager.records
+        ]
+        manifest = {
+            "schema_version": MULTIMODAL_SCHEMA_VERSION,
+            "source": source_state,
+            "vault_root": str(vault),
+            "title": title,
+            "draft": str(draft_path),
+            "planned_markdown": str(inbox_path),
+            "results_file": str(results_path),
+            "images": images,
+        }
+        write_atomic(manifest_path, json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+        return {
+            "status": "needs_multimodal",
+            "mode": "multimodal",
+            "source": str(source),
+            "source_sha256": source_state["sha256"],
+            "manifest": str(manifest_path),
+            "results_file": str(results_path),
+            "images": images,
+            "images_to_read": sum(1 for image in images if image["model_readable"]),
+            "results_contract": {
+                "images": [
+                    {
+                        "id": "I001",
+                        "markdown": "忠实转写图片文字、表格、图表或示意关系；无法确认时明确标记",
+                        "confidence": "high|medium|low",
+                        "uncertainties": ["可选：无法确认的局部内容"],
+                    }
+                ]
+            },
+        }
+    except Exception:
+        if job_root.exists():
+            shutil.rmtree(job_root, ignore_errors=True)
+        raise
+
+
+def load_json_object(path: Path, label: str) -> dict:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ConversionError(f"无法读取{label}：{error}") from error
+    if not isinstance(value, dict):
+        raise ConversionError(f"{label}顶层必须是 JSON 对象。")
+    return value
+
+
+def validate_multimodal_job_path(manifest_path: Path) -> Path:
+    job_root = manifest_path.parent.resolve()
+    temp_root = Path(tempfile.gettempdir()).resolve()
+    if job_root.parent != temp_root or not job_root.name.startswith("knowledge-capture-multimodal-"):
+        raise ConversionError("多模态 manifest 必须位于知识收创建的系统临时目录。")
+    return job_root
+
+
+def resolved_job_file(value: object, job_root: Path, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ConversionError(f"多模态 manifest 缺少 {label}。")
+    path = Path(value).expanduser().resolve()
+    if path.parent != job_root:
+        raise ConversionError(f"多模态 manifest 中的 {label} 越出临时任务目录。")
+    return path
+
+
+def render_multimodal_result(image: dict, result: dict | None) -> str:
+    location = str(image.get("location") or "位置未知")
+    if not image.get("model_readable"):
+        reason = str(image.get("unreadable_reason") or "图片格式不受模型读取工具支持")
+        return f"> [!warning] 图片未完成多模态识别\n> 位置：{location}\n> 原因：{reason}"
+
+    assert result is not None
+    confidence = str(result["confidence"])
+    uncertainties = result.get("uncertainties", [])
+    header = [
+        "> [!info] 图片多模态识别",
+        f"> 位置：{location}",
+        f"> 置信度：{confidence}",
+    ]
+    if uncertainties:
+        header.append("> 不确定项：" + "；".join(uncertainties))
+    if confidence == "low":
+        header.append("> [!warning] 低置信度结果必须对照原文件复核。")
+    return "\n".join(header) + "\n\n" + str(result["markdown"]).strip()
+
+
+def apply_multimodal(manifest_value: str, results_value: str | None, vault: Path, cleanup: bool) -> dict:
+    manifest_path = Path(manifest_value).expanduser().resolve()
+    job_root = validate_multimodal_job_path(manifest_path)
+    manifest = load_json_object(manifest_path, "多模态 manifest")
+    if manifest.get("schema_version") != MULTIMODAL_SCHEMA_VERSION:
+        raise ConversionError("多模态 manifest 版本不受支持。")
+    if Path(str(manifest.get("vault_root") or "")).resolve() != vault:
+        raise ConversionError("多模态 manifest 的 Vault 与当前 --vault-root 不一致。")
+
+    source_data = manifest.get("source")
+    if not isinstance(source_data, dict):
+        raise ConversionError("多模态 manifest 缺少来源状态。")
+    source = validate_source(str(source_data.get("path") or ""))
+    if not source_is_unchanged(source, source_data):
+        raise ConversionError("源文件在多模态识别期间发生变化，已停止写入。")
+
+    draft_path = resolved_job_file(manifest.get("draft"), job_root, "draft")
+    expected_results_path = resolved_job_file(manifest.get("results_file"), job_root, "results_file")
+    results_path = Path(results_value).expanduser().resolve() if results_value else expected_results_path
+    if results_path != expected_results_path:
+        raise ConversionError("--results 必须使用 prepare 返回的 results_file。")
+    results = load_json_object(results_path, "多模态识别结果")
+
+    images = manifest.get("images")
+    if not isinstance(images, list) or not images:
+        raise ConversionError("多模态 manifest 没有图片清单。")
+    expected_ids = {
+        str(image.get("id"))
+        for image in images
+        if isinstance(image, dict) and image.get("model_readable")
+    }
+    result_items = results.get("images")
+    if not isinstance(result_items, list):
+        raise ConversionError("多模态识别结果必须包含 images 数组。")
+    result_map: dict[str, dict] = {}
+    errors: list[str] = []
+    for index, item in enumerate(result_items, 1):
+        if not isinstance(item, dict):
+            errors.append(f"images[{index}] 必须是对象")
+            continue
+        identifier = str(item.get("id") or "")
+        if not identifier or identifier in result_map:
+            errors.append(f"images[{index}] 的 id 缺失或重复")
+            continue
+        markdown = item.get("markdown")
+        confidence = item.get("confidence")
+        uncertainties = item.get("uncertainties", [])
+        if not isinstance(markdown, str) or not markdown.strip():
+            errors.append(f"{identifier} 缺少非空 markdown")
+        if confidence not in {"high", "medium", "low"}:
+            errors.append(f"{identifier} 的 confidence 必须是 high、medium 或 low")
+        if not isinstance(uncertainties, list) or not all(isinstance(value, str) and value.strip() for value in uncertainties):
+            errors.append(f"{identifier} 的 uncertainties 必须是非空字符串数组")
+        if isinstance(markdown, str) and MULTIMODAL_PLACEHOLDER in markdown:
+            errors.append(f"{identifier} 的 markdown 含保留占位符")
+        result_map[identifier] = item
+    actual_ids = set(result_map)
+    if actual_ids != expected_ids:
+        errors.append(
+            "图片结果 ID 不完整："
+            f"missing={sorted(expected_ids - actual_ids)}, extra={sorted(actual_ids - expected_ids)}"
+        )
+    if errors:
+        raise ConversionError("多模态识别结果校验失败：" + "；".join(errors))
+
+    draft = draft_path.read_text(encoding="utf-8")
+    for image in images:
+        if not isinstance(image, dict) or not isinstance(image.get("id"), str):
+            raise ConversionError("多模态 manifest 含无效图片记录。")
+        image_path = resolved_job_file(image.get("path"), job_root / "images", f"{image['id']} path")
+        if not image_path.is_file() or sha256_file(image_path) != image.get("sha256"):
+            raise ConversionError(f"多模态临时图片缺失或已变化：{image['id']}")
+        token = f"<!-- {MULTIMODAL_PLACEHOLDER}:{image['id']} -->"
+        if draft.count(token) != 1:
+            raise ConversionError(f"多模态草稿中的图片占位符异常：{image['id']}")
+        draft = draft.replace(token, render_multimodal_result(image, result_map.get(image["id"])))
+    if MULTIMODAL_PLACEHOLDER in draft:
+        raise ConversionError("多模态草稿仍有未处理图片占位符。")
+    if not source_is_unchanged(source, source_data):
+        raise ConversionError("源文件在多模态结果应用前发生变化，已停止写入。")
+
+    planned = Path(str(manifest.get("planned_markdown") or "")).expanduser().resolve()
+    if planned.parent != (vault / "01_Inbox").resolve():
+        raise ConversionError("多模态 manifest 的输出路径不在 01_Inbox。")
+    output = unique_path(planned)
+    write_atomic(output, draft)
+    cleanup_warning = None
+    if cleanup:
+        try:
+            shutil.rmtree(job_root)
+        except OSError as error:
+            cleanup_warning = str(error)
+    return {
+        "status": "ok",
+        "source": str(source),
+        "source_sha256": source_data["sha256"],
+        "mode": "multimodal",
+        "markdown": str(output),
+        "images_processed": len(images),
+        "images_recognized": len(expected_ids),
+        "images_unreadable": len(images) - len(expected_ids),
+        "temporary_files_removed": cleanup and cleanup_warning is None,
+        "cleanup_warning": cleanup_warning,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", nargs="?", help="Excel/CSV/PDF/DOCX/PPTX source file")
     parser.add_argument("--inspect", action="store_true", help="Inspect format, images, hash, and dependencies without writing")
     parser.add_argument("--vault-root", help="Initialized Knowledge Vault root used for final output")
-    parser.add_argument("--mode", choices=("text", "attachments", "ocr"), default="text")
+    parser.add_argument("--mode", choices=("text", "attachments", "multimodal"), default="text")
     parser.add_argument("--title", help="Override the generated Inbox note title")
-    parser.add_argument("--ocr-language", default="chi_sim+eng")
+    parser.add_argument("--apply-multimodal", metavar="MANIFEST", help="Apply model-produced image results to a prepared draft")
+    parser.add_argument("--results", help="Model-produced multimodal results JSON returned by prepare")
+    parser.add_argument("--cleanup", action="store_true", help="Remove temporary multimodal files after verified success")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        source = validate_source(args.source)
-        if args.inspect:
-            result = inspect_source(source)
+        if args.apply_multimodal and args.inspect:
+            raise ConversionError("--inspect 不能与 --apply-multimodal 同时使用。")
+        if args.results and not args.apply_multimodal:
+            raise ConversionError("--results 只能与 --apply-multimodal 同时使用。")
+        if args.cleanup and not args.apply_multimodal:
+            raise ConversionError("--cleanup 只能与 --apply-multimodal 同时使用。")
+        if args.apply_multimodal and args.source:
+            raise ConversionError("应用多模态结果时不再传入源文件位置参数。")
+        if args.apply_multimodal:
+            result = apply_multimodal(args.apply_multimodal, args.results, validate_vault(args.vault_root), args.cleanup)
         else:
-            result = run_conversion(source, validate_vault(args.vault_root), args.mode, args.title, args.ocr_language)
+            source = validate_source(args.source)
+            if args.inspect:
+                result = inspect_source(source)
+            elif args.mode == "multimodal":
+                result = prepare_multimodal(source, validate_vault(args.vault_root), args.title)
+            else:
+                result = run_conversion(source, validate_vault(args.vault_root), args.mode, args.title)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except (ConversionError, DependencyError, zipfile.BadZipFile) as error:

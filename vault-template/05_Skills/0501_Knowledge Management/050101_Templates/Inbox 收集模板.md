@@ -9,7 +9,7 @@ source_format: "{{source_format}}"
 source_bytes: {{source_bytes}}
 source_modified: "{{source_modified}}"
 source_sha256: "{{source_sha256}}"
-conversion_mode: "{{text|attachments|ocr}}"
+conversion_mode: "{{text|attachments|multimodal}}"
 type: source
 status: inbox
 description: >
@@ -31,6 +31,6 @@ related: []
 > [!info] 转换来源
 > `{{source_file}}` · {{source_bytes}} bytes · `{{conversion_mode}}`
 
-{{按源文件顺序转换的正文、表格、列表、分页/幻灯片和图片或 OCR 内容}}
+{{按源文件顺序转换的正文、表格、列表、分页/幻灯片和原图或多模态识别内容}}
 
 <!-- 仅在存在无法转换、识别失败或版式偏差时添加“## 转换说明”。 -->
