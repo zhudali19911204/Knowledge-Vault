@@ -875,7 +875,7 @@ try {
             includes = @("complete-row interpretation")
             excludes = @("missing-amount remediation")
             evidence = @($evidenceId)
-            route = "05_Skills/Organize Batch"
+            route = "02_Domains/Organize Batch"
             reason = "Reusable interpretation rule"
             confidence = 0.93
             conclusion = "Interpret account, amount, and description together."
@@ -893,7 +893,7 @@ try {
             includes = @("missing-amount review")
             excludes = @("populated-row interpretation")
             evidence = @($evidenceId)
-            route = "05_Skills/Organize Batch"
+            route = "02_Domains/Organize Batch"
             reason = "Reusable data-quality procedure"
             confidence = 0.91
             conclusion = "Keep the amount empty and flag it for review."
@@ -942,6 +942,20 @@ try {
         ($organizeCards | ConvertTo-Json -Depth 20),
         [System.Text.UTF8Encoding]::new($false)
     )
+    $routeIndexName = (-join @([char]0x77E5, [char]0x8BC6, [char]0x8DEF, [char]0x7531, [char]0x7D22, [char]0x5F15)) + ".md"
+    $domainIndexName = "_" + (-join @([char]0x4E13, [char]0x4E1A, [char]0x9886, [char]0x57DF, [char]0x7D22, [char]0x5F15)) + ".md"
+    $autoRegistrationHeading = "## " + (-join @([char]0x81EA, [char]0x52A8, [char]0x767B, [char]0x8BB0, [char]0x7684, [char]0x77E5, [char]0x8BC6, [char]0x5305))
+    $needsReviewPrefix = -join @([char]0x5F85, [char]0x5B8C, [char]0x5584, [char]0xFF1A)
+    [System.IO.File]::AppendAllText(
+        (Join-Path $initializedVault $routeIndexName),
+        "`n$autoRegistrationHeading`n`n- [[02_Domains/0201_Organize Batch/_Index|Organize Batch]]$([char]0xFF1A)interpret a populated cost row`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::AppendAllText(
+        (Join-Path $initializedVault (Join-Path "02_Domains" $domainIndexName)),
+        "`n$autoRegistrationHeading`n`n- [[02_Domains/0201_Organize Batch/_Index|Organize Batch]]`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
     $organizeApplyJson = & python $initializedOrganizeScript apply $organizeManifestPath --cards $organizeCardsPath --vault-root $initializedVault
     if ($LASTEXITCODE -ne 0) {
         throw "Knowledge organize apply failed with exit code $LASTEXITCODE."
@@ -949,7 +963,7 @@ try {
     $organizeApply = $organizeApplyJson | ConvertFrom-Json
     $organizedCardPaths = @($organizeApply.cards | ForEach-Object { Join-Path $initializedVault ([string]$_).Replace("/", "\") })
     $organizedSource = Get-ChildItem -LiteralPath (Join-Path $initializedVault "06_Archive") -Recurse -File -Filter (Split-Path -Leaf ([string]$captureManifest.markdown)) | Select-Object -First 1
-    $organizedIndex = Get-ChildItem -LiteralPath (Join-Path $initializedVault "05_Skills") -Recurse -File -Filter "_Index.md" |
+    $organizedIndex = Get-ChildItem -LiteralPath (Join-Path $initializedVault "02_Domains") -Recurse -File -Filter "_Index.md" |
         Where-Object { (Get-Content -Raw -Encoding UTF8 -LiteralPath $_.FullName) -match 'Interpret Complete Rows' } |
         Select-Object -First 1
     if (
@@ -966,6 +980,20 @@ try {
     $organizedSourceText = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedSource.FullName
     if ($organizedSourceText -notmatch 'Interpret Complete Rows' -or $organizedSourceText -notmatch 'Handle Missing Amounts') {
         throw "Knowledge organize did not create source backlinks for every generated card."
+    }
+    $organizedRootIndexText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $initializedVault $routeIndexName)
+    $organizedCategoryIndexText = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $initializedVault (Join-Path "02_Domains" $domainIndexName))
+    $organizedPackageRow = "| [[02_Domains/0201_Organize Batch/_Index|Organize Batch]] | ${needsReviewPrefix}interpret a populated cost row |"
+    if (
+        (-not $organizedRootIndexText.Contains($organizedPackageRow)) -or
+        (-not $organizedCategoryIndexText.Contains($organizedPackageRow)) -or
+        $organizedRootIndexText.Contains($autoRegistrationHeading) -or
+        $organizedCategoryIndexText.Contains($autoRegistrationHeading) -or
+        $organizedRootIndexText.Contains("| " + (-join @([char]0x6682, [char]0x65E0)) + " | " + (-join @([char]0x9996, [char]0x6B21, [char]0x5F62, [char]0x6210, [char]0x7A33, [char]0x5B9A, [char]0x4E13, [char]0x4E1A, [char]0x4E3B, [char]0x9898))) -or
+        $organizedCategoryIndexText.Contains((-join @([char]0x5F53, [char]0x524D, [char]0x4E3A, [char]0x7A7A))) -or
+        $organizedRootIndexText.Contains((-join @([char]0x6B64, [char]0x6A21, [char]0x677F, [char]0x5C1A, [char]0x65E0, [char]0x7528, [char]0x6237, [char]0x77E5, [char]0x8BC6)))
+    ) {
+        throw "Knowledge organize did not register a review-required package in the corresponding category tables."
     }
     $firstOrganizedCard = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedCardPaths[0]
     $secondOrganizedCard = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedCardPaths[1]

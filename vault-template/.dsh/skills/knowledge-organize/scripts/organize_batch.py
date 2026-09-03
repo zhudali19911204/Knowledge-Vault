@@ -23,6 +23,12 @@ from pathlib import Path
 SCHEMA_VERSION = 1
 CONFIDENCE_THRESHOLD = 0.85
 CARD_ROUTE_ROOTS = {"02_Domains", "03_Areas", "04_Resources", "05_Skills"}
+CATEGORY_INDEX_CONFIG = {
+    "02_Domains": ("_专业领域索引.md", "专业领域"),
+    "03_Areas": ("_长期领域索引.md", "长期领域"),
+    "04_Resources": ("_资源索引.md", "资源"),
+    "05_Skills": ("_技能索引.md", "技能与工作流"),
+}
 IGNORED_DIRECTORIES = {
     ".agents",
     ".codex",
@@ -737,6 +743,144 @@ def ensure_bullet_section(path: Path, heading: str, bullets: list[str]) -> None:
     write_atomic(path, updated)
 
 
+def level_two_section(body: str, heading: str) -> tuple[int, int] | None:
+    pattern = re.compile(rf"(?m)^##\s+{re.escape(heading)}\s*$")
+    match = pattern.search(body)
+    if match is None:
+        return None
+    next_heading = re.search(r"(?m)^##\s+", body[match.end():])
+    end = match.end() + (next_heading.start() if next_heading else len(body[match.end():]))
+    return match.start(), end
+
+
+def wiki_target(link: str) -> str | None:
+    match = re.fullmatch(r"\[\[(?P<target>[^\]|]+)(?:\|[^\]]+)?\]\]", link.strip())
+    return match.group("target") if match else None
+
+
+def automatic_registrations(path: Path) -> list[dict[str, str]]:
+    if not path.is_file():
+        return []
+    _, body = split_frontmatter(read_text(path))
+    bounds = level_two_section(body, "自动登记的知识包")
+    if bounds is None:
+        return []
+    section = body[bounds[0]:bounds[1]]
+    registrations: list[dict[str, str]] = []
+    pattern = re.compile(
+        r"(?m)^-\s+(?P<link>\[\[(?P<target>[^\]|]+)(?:\|[^\]]+)?\]\])"
+        r"(?:：(?P<description>.*))?\s*$"
+    )
+    for match in pattern.finditer(section):
+        registrations.append(
+            {
+                "link": match.group("link"),
+                "target": match.group("target"),
+                "description": compact_text(match.group("description") or ""),
+            }
+        )
+    return registrations
+
+
+def remove_automatic_registration(path: Path) -> None:
+    if not path.is_file():
+        return
+    content = read_text(path)
+    yaml_text, body = split_frontmatter(content)
+    cleaned = remove_level_two_section(body, "自动登记的知识包")
+    if cleaned == body.rstrip():
+        return
+    updated = f"---\n{yaml_text.rstrip()}\n---\n\n{cleaned.rstrip()}\n"
+    updated = set_frontmatter_fields(
+        updated,
+        {"updated": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")},
+    )
+    write_atomic(path, updated)
+
+
+def remove_empty_catalog_copy(body: str, *, root_index: bool) -> str:
+    if root_index:
+        cleaned = re.sub(
+            r"(?m)^此模板尚无用户知识。创建主题 `_Index\.md` 后，在对应表格中增加一行。"
+            r"AI 应先匹配“什么时候使用”，再检查“不适用场景”，不能只依赖关键词。\s*",
+            "",
+            body,
+            count=1,
+        )
+    else:
+        cleaned = re.sub(
+            r"(?ms)^当前为空。[^\r\n]*\r?\n\s*```text\s*\r?\n.*?\r?\n```\s*\r?\n\s*"
+            r"创建后将知识包加入本页和根目录 \[\[知识路由索引\]\]。\s*",
+            "",
+            body,
+            count=1,
+        )
+        cleaned = re.sub(r"(?m)^当前没有资源知识包。\s*$", "", cleaned, count=1)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).lstrip("\r\n")
+
+
+def ensure_package_table_row(
+    path: Path,
+    heading: str,
+    link: str,
+    description: str,
+    *,
+    root_index: bool = False,
+) -> None:
+    if not path.is_file():
+        return
+    content = read_text(path)
+    yaml_text, body = split_frontmatter(content)
+    body = remove_empty_catalog_copy(body, root_index=root_index)
+    bounds = level_two_section(body, heading)
+    row = f"| {link} | {compact_text(description).replace('|', '\\|')} |"
+    target = wiki_target(link)
+
+    if bounds is None:
+        table = "\n".join(
+            [
+                f"## {heading}",
+                "",
+                "| 知识包 | 什么时候使用 |",
+                "|---|---|",
+                row,
+            ]
+        )
+        body = body.rstrip() + "\n\n" + table + "\n"
+    else:
+        start, end = bounds
+        section = body[start:end]
+        target_pattern = re.compile(
+            rf"(?m)^\|\s*\[\[{re.escape(target or '')}(?:\|[^\]]+)?\]\]\s*\|"
+        )
+        if target is None or target_pattern.search(section) is None:
+            lines = section.rstrip().splitlines()
+            lines = [line for line in lines if not re.match(r"^\|\s*暂无\s*\|", line)]
+            header_index = next(
+                (index for index, line in enumerate(lines) if re.match(r"^\|\s*知识包\s*\|", line)),
+                None,
+            )
+            if header_index is None:
+                lines.extend(["", "| 知识包 | 什么时候使用 |", "|---|---|", row])
+            else:
+                insert_at = header_index + 1
+                while insert_at < len(lines) and lines[insert_at].lstrip().startswith("|"):
+                    insert_at += 1
+                lines.insert(insert_at, row)
+            section = "\n".join(lines).rstrip() + "\n\n"
+            body = body[:start] + section + body[end:].lstrip("\r\n")
+
+    body = re.sub(r"(?m)^(#{1,6}\s+.+)\n(?=\S)", r"\1\n\n", body)
+    body = re.sub(r"(?m)^(\|.*\|)\n(?=##\s+)", r"\1\n\n", body)
+    updated = f"---\n{yaml_text.rstrip()}\n---\n\n{body.rstrip()}\n"
+    updated = set_frontmatter_fields(
+        updated,
+        {"updated": datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")},
+    )
+    if updated != content:
+        write_atomic(path, updated)
+
+
 def register_indexes(vault: Path, card_paths: list[Path], manifest: dict) -> None:
     by_directory: dict[Path, list[Path]] = {}
     for path in card_paths:
@@ -759,12 +903,14 @@ def register_indexes(vault: Path, card_paths: list[Path], manifest: dict) -> Non
                 [wiki_link(index, vault, directory.name.split("_", 1)[-1])],
             )
 
-    category_indexes = {
-        "02_Domains": "_专业领域索引.md",
-        "03_Areas": "_长期领域索引.md",
-        "04_Resources": "_资源索引.md",
-        "05_Skills": "_技能索引.md",
-    }
+    root_index = vault / "知识路由索引.md"
+    registrations: dict[str, dict[str, str]] = {}
+    for item in automatic_registrations(root_index):
+        registrations[item["target"]] = item
+    for root_name, (index_name, _) in CATEGORY_INDEX_CONFIG.items():
+        for item in automatic_registrations(vault / root_name / index_name):
+            registrations.setdefault(item["target"], item)
+
     first_level: dict[Path, dict] = {}
     for card, path in zip(manifest.get("cards", []), card_paths):
         relative = path.relative_to(vault)
@@ -773,15 +919,48 @@ def register_indexes(vault: Path, card_paths: list[Path], manifest: dict) -> Non
         directory = vault / relative.parts[0] / relative.parts[1]
         first_level.setdefault(directory, card)
 
-    root_index = vault / "知识路由索引.md"
     for directory, card in first_level.items():
-        root_name = directory.relative_to(vault).parts[0]
         index = directory / "_Index.md"
         label = directory.name.split("_", 1)[-1]
         link = wiki_link(index, vault, label)
-        ensure_bullet_section(vault / root_name / category_indexes[root_name], "自动登记的知识包", [link])
         use_when = str((card.get("use_when") or [label])[0])
-        ensure_bullet_section(root_index, "自动登记的知识包", [f"{link}：{use_when}"])
+        target = wiki_target(link)
+        if target:
+            registrations[target] = {
+                "link": link,
+                "target": target,
+                "description": compact_text(use_when),
+            }
+
+    for registration in registrations.values():
+        target = registration["target"]
+        root_name = target.split("/", 1)[0]
+        config = CATEGORY_INDEX_CONFIG.get(root_name)
+        if config is None:
+            continue
+        index_name, root_heading = config
+        package_index = vault / f"{target}.md"
+        description = registration["description"] or f"浏览 {package_index.parent.name.split('_', 1)[-1]} 知识时"
+        if package_index.is_file() and scalar_value(read_text(package_index), "status") == "needs-review":
+            if not description.startswith("待完善："):
+                description = f"待完善：{description}"
+        ensure_package_table_row(
+            vault / root_name / index_name,
+            "知识包",
+            registration["link"],
+            description,
+        )
+        ensure_package_table_row(
+            root_index,
+            root_heading,
+            registration["link"],
+            description,
+            root_index=True,
+        )
+
+    remove_automatic_registration(root_index)
+    for root_name, (index_name, _) in CATEGORY_INDEX_CONFIG.items():
+        remove_automatic_registration(vault / root_name / index_name)
 
 
 def update_source(

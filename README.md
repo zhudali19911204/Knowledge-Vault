@@ -292,7 +292,7 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 - `.dsh/plugins/knowledge-vault-bootstrap/assets/knowledge-vault-favicon.png` 是由灰橙 Z Logo 制作的透明图标，用于浏览器 favicon 和左侧栏 24×24 品牌标记；页面加载后标签标题固定为 `Knowledge Vault`。
 - 初始化后的 `05_Skills/` 仍是 Obsidian 内的可复用知识；`.dsh/skills/` 是 Agent 运行时说明，两者不混用。
 - `vault-template/.agents/scripts/knowledge_router.py` 是模板中的路由器，初始化后位于用户 Vault 的 `.agents/scripts/`。
-- `vault-template/.dsh/skills/knowledge-organize/scripts/organize_batch.py` 将单篇来源的紧凑卡片 JSON 批量落盘，避免模型逐卡重复读取来源、拼装 YAML 和维护索引。
+- `vault-template/.dsh/skills/knowledge-organize/scripts/organize_batch.py` 将单篇来源的紧凑卡片 JSON 批量落盘，并把新知识包直接登记到对应分类表；未复核包显示“待完善”，不再另建“自动登记的知识包”区域。
 - `vault-template/.dsh/skills/knowledge-capture/scripts/capture.py` 在 Harness 用户数据目录管理文档转换专用虚拟环境，统一调用转换器，避免运行时把依赖写入系统 Python 或 Vault。
 - 模型设置、API 密钥、会话和生成的 DSH patch 保存在 `%LOCALAPPDATA%\KnowledgeVaultHarness`，不进入发布包或 Vault。
 
