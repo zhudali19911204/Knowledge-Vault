@@ -78,6 +78,11 @@ window.__ModuleLoader__.load({
       .kv-markdown-frontmatter pre{max-height:240px;margin:0;padding:0 10px 10px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.55 var(--ds-font-family-code)}
       .kv-markdown-frontmatter pre a{color:var(--dsw-alias-label-primary);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:2px;cursor:pointer}
       .kv-markdown-frontmatter pre a:hover{color:#d85f16}
+      a[data-knowledge-vault-path]{color:#d85f16!important;text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;cursor:pointer}
+      a[data-knowledge-vault-path]:hover{color:#b84b0f!important}
+      .kv-relationship-section h2{margin:1.4em 0 .65em;font-size:1.5em;line-height:1.3}
+      .kv-relationship-section ul{margin:.5em 0 1em;padding-left:1.5em}
+      .kv-relationship-section li{margin:.25em 0}
       .kv-markdown-empty{color:var(--dsw-alias-label-tertiary);font-style:italic}
       .kv-reader{height:100%;min-height:0;box-sizing:border-box;display:flex;flex-direction:column;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-family:var(--dsw-font-family)}
       .kv-reader-header{flex:none;min-height:58px;box-sizing:border-box;display:flex;align-items:center;gap:12px;padding:10px 18px;border-bottom:1px solid var(--dsw-alias-border-l2);background:var(--dsw-alias-bg-layer-1)}
@@ -347,7 +352,9 @@ window.__ModuleLoader__.load({
           return line;
         }
         if (fence) return line;
-        return rewriteObsidianDocumentLinkLine(rewriteMarkdownImageLine(line, documentPath), documentPath);
+        // Keep document Wiki links literal. After Markdown rendering they are
+        // upgraded into the same direct Vault anchors used by frontmatter.
+        return rewriteMarkdownImageLine(line, documentPath);
       });
     }
 
@@ -450,10 +457,11 @@ window.__ModuleLoader__.load({
       const lines = String(frontmatter || "").split(/\r?\n/);
       const tokens = [];
       let activeProperty = "";
+      const relationshipProperties = new Set(["related", "source_notes", "parent_index"]);
       lines.forEach((line, lineIndex) => {
         const property = line.match(/^([A-Za-z_][A-Za-z\d_-]*):(?:\s|$)/);
         if (property) activeProperty = property[1];
-        const links = activeProperty === "related"
+        const links = relationshipProperties.has(activeProperty)
           ? findObsidianVaultDocumentLinks(line, documentPath)
           : [];
         if (links.length === 0) {
@@ -476,12 +484,86 @@ window.__ModuleLoader__.load({
       const tokens = tokenizeFrontmatterRelatedLinks(frontmatter, documentPath);
       return e("pre", null, ...tokens.map((token, index) => token.kind === "link"
         ? e("a", {
-          key: `related-${index}-${token.path}`,
+          key: `relationship-${index}-${token.path}`,
           href: token.requestedPath,
           "data-knowledge-vault-path": token.path,
           title: `在阅读器中打开：${token.path}`,
         }, token.label)
         : token.text));
+    }
+
+    function tokenizeVaultDocumentLinks(text, documentPath = "") {
+      const source = String(text || "");
+      const links = findObsidianVaultDocumentLinks(source, documentPath);
+      const tokens = [];
+      let cursor = 0;
+      links.forEach((link) => {
+        if (link.index > cursor) tokens.push({ kind: "text", text: source.slice(cursor, link.index) });
+        tokens.push({ kind: "link", ...link });
+        cursor = link.index + link.length;
+      });
+      if (cursor < source.length) tokens.push({ kind: "text", text: source.slice(cursor) });
+      return tokens;
+    }
+
+    function splitMarkdownRelationshipSection(body) {
+      const lines = String(body || "").split(/\r?\n/);
+      const start = lines.findIndex((line) => /^##\s+来源与关联\s*$/.test(line));
+      if (start < 0) return null;
+      let end = lines.length;
+      for (let index = start + 1; index < lines.length; index += 1) {
+        if (/^##\s+/.test(lines[index])) {
+          end = index;
+          break;
+        }
+      }
+      return {
+        before: lines.slice(0, start).join("\n"),
+        lines: lines.slice(start + 1, end),
+        after: lines.slice(end).join("\n"),
+      };
+    }
+
+    function VaultRelationshipText({ text, documentPath, keyPrefix }) {
+      const tokens = tokenizeVaultDocumentLinks(text, documentPath);
+      return e(React.Fragment, null, ...tokens.map((token, index) => token.kind === "link"
+        ? e("a", {
+          key: `${keyPrefix}-link-${index}-${token.path}`,
+          href: token.requestedPath,
+          "data-knowledge-vault-path": token.path,
+          title: `在阅读器中打开：${token.path}`,
+        }, token.label)
+        : token.text));
+    }
+
+    function VaultRelationshipSection({ lines, documentPath }) {
+      const bullets = [];
+      const paragraphs = [];
+      lines.forEach((line, index) => {
+        const bullet = line.match(/^\s*[-*+]\s+(.+)$/);
+        if (bullet) {
+          bullets.push(e("li", { key: `relationship-bullet-${index}` },
+            e(VaultRelationshipText, {
+              text: bullet[1],
+              documentPath,
+              keyPrefix: `relationship-bullet-${index}`,
+            }),
+          ));
+        } else if (line.trim()) {
+          paragraphs.push(e("p", { key: `relationship-paragraph-${index}` },
+            e(VaultRelationshipText, {
+              text: line.trim(),
+              documentPath,
+              keyPrefix: `relationship-paragraph-${index}`,
+            }),
+          ));
+        }
+      });
+      return e("section", { className: "kv-relationship-section" },
+        e("h2", null, "来源与关联"),
+        bullets.length ? e("ul", null, ...bullets) : null,
+        ...paragraphs,
+      );
     }
 
     function findMalformedVaultMarkdownLinks(text, documentPath = "") {
@@ -508,6 +590,20 @@ window.__ModuleLoader__.load({
     function upgradeMalformedVaultMarkdownLinks(root) {
       if (!root) return 0;
       const ownerDocument = root.ownerDocument || document;
+      const renderedAnchors = [];
+      const rootElement = root.nodeType === 3 ? root.parentElement : root;
+      if (rootElement?.matches?.("a[href]")) renderedAnchors.push(rootElement);
+      rootElement?.querySelectorAll?.("a[href]").forEach((anchor) => renderedAnchors.push(anchor));
+      let upgraded = 0;
+      for (const anchor of renderedAnchors) {
+        if (anchor.hasAttribute("download") || anchor.hasAttribute("data-knowledge-vault-path")) continue;
+        const documentPath = anchor.closest("[data-vault-document-path]")?.getAttribute("data-vault-document-path") || "";
+        const path = resolveVaultDocumentPath(documentPath, anchor.getAttribute("href"));
+        if (!path) continue;
+        anchor.setAttribute("data-knowledge-vault-path", path);
+        anchor.setAttribute("title", `在阅读器中打开：${path}`);
+        upgraded += 1;
+      }
       const textNodes = [];
       if (root.nodeType === 3) {
         textNodes.push(root);
@@ -517,7 +613,6 @@ window.__ModuleLoader__.load({
         while ((node = walker.nextNode())) textNodes.push(node);
       }
 
-      let upgraded = 0;
       for (const node of textNodes) {
         const parent = node.parentElement;
         const text = String(node.nodeValue || "");
@@ -551,9 +646,16 @@ window.__ModuleLoader__.load({
     }
 
     function MarkdownDocument({ document, compact = false }) {
+      const documentRef = React.useRef(null);
       const { frontmatter, body } = splitMarkdownSource(document?.content || "");
-      const renderedBody = renderMarkdownSource(body, document?.path || "");
+      const relationshipSection = splitMarkdownRelationshipSection(body);
+      const renderedBody = renderMarkdownSource(relationshipSection?.before ?? body, document?.path || "");
+      const renderedAfter = renderMarkdownSource(relationshipSection?.after || "", document?.path || "");
+      React.useLayoutEffect(() => {
+        upgradeMalformedVaultMarkdownLinks(documentRef.current);
+      }, [document?.path, document?.content]);
       return e("article", {
+        ref: documentRef,
         className: "kv-markdown-document",
         "data-compact": compact ? "true" : "false",
         "data-vault-document-path": document?.path || "",
@@ -570,7 +672,15 @@ window.__ModuleLoader__.load({
             text: renderedBody,
             codeLabels: { copyLabel: "复制", copiedLabel: "已复制" },
           })
-          : e("div", { className: "kv-markdown-empty" }, "此 Markdown 文档没有正文。"),
+          : relationshipSection ? null : e("div", { className: "kv-markdown-empty" }, "此 Markdown 文档没有正文。"),
+        relationshipSection ? e(VaultRelationshipSection, {
+          lines: relationshipSection.lines,
+          documentPath: document?.path || "",
+        }) : null,
+        renderedAfter.trim() ? e(MarkdownText, {
+          text: renderedAfter,
+          codeLabels: { copyLabel: "复制", copiedLabel: "已复制" },
+        }) : null,
       );
     }
 

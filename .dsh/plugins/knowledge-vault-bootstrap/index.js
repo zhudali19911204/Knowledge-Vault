@@ -604,6 +604,7 @@ function extractGraphReferences(document) {
 
 async function collectMarkdownFiles(vaultRoot) {
   const files = [];
+  const allFilePaths = [];
   async function visit(directory, relativeDirectory) {
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
@@ -614,7 +615,9 @@ async function collectMarkdownFiles(vaultRoot) {
         if (!GRAPH_IGNORED_DIRECTORIES.has(entry.name)) await visit(fullPath, relativePath);
         continue;
       }
-      if (!entry.isFile() || extname(entry.name).toLowerCase() !== ".md") continue;
+      if (!entry.isFile()) continue;
+      allFilePaths.push(relativePath);
+      if (extname(entry.name).toLowerCase() !== ".md") continue;
       files.push({ fullPath, path: relativePath });
       if (files.length > MAX_GRAPH_FILES) {
         throw Object.assign(new Error(`Vault 中的 Markdown 文件超过 ${MAX_GRAPH_FILES} 个，第一阶段图谱暂不加载。`), {
@@ -624,7 +627,7 @@ async function collectMarkdownFiles(vaultRoot) {
     }
   }
   await visit(vaultRoot, "");
-  return files;
+  return { files, allFilePaths };
 }
 
 async function collectVaultFiles(vaultRoot) {
@@ -698,8 +701,35 @@ function graphReferenceResolver(nodes) {
   };
 }
 
+function graphFileResolver(paths) {
+  const exact = new Set();
+  const names = new Map();
+  for (const path of paths) {
+    const normalized = graphPath(path).toLowerCase();
+    exact.add(normalized);
+    const name = basename(normalized);
+    const matches = names.get(name) || [];
+    matches.push(normalized);
+    names.set(name, matches);
+  }
+  return (sourcePath, rawReference) => {
+    let reference = cleanGraphReference(rawReference);
+    if (!reference) return false;
+    const rootRelative = reference.startsWith("/");
+    reference = reference.replace(/^\/+/, "");
+    const sourceDirectory = sourcePath.includes("/")
+      ? sourcePath.slice(0, sourcePath.lastIndexOf("/"))
+      : "";
+    const candidates = rootRelative
+      ? [graphPath(reference)]
+      : [graphPath(`${sourceDirectory}/${reference}`), graphPath(reference)];
+    if (candidates.some((candidate) => exact.has(candidate.toLowerCase()))) return true;
+    return names.get(basename(reference).toLowerCase())?.length === 1;
+  };
+}
+
 async function buildKnowledgeGraph(vaultRoot) {
-  const files = await collectMarkdownFiles(vaultRoot);
+  const { files, allFilePaths } = await collectMarkdownFiles(vaultRoot);
   const documents = [];
   for (const file of files) {
     const details = await stat(file.fullPath);
@@ -747,6 +777,7 @@ async function buildKnowledgeGraph(vaultRoot) {
   const nodes = documents.map((item) => item.node);
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const resolveReference = graphReferenceResolver(nodes);
+  const resolveFile = graphFileResolver(allFilePaths);
   const edges = [];
   const edgeKeys = new Set();
   const unresolved = [];
@@ -756,8 +787,8 @@ async function buildKnowledgeGraph(vaultRoot) {
       const rawTarget = cleanGraphReference(reference.value);
       const target = resolveReference(item.path, rawTarget);
       if (!target) {
-        if (rawTarget) {
-          const key = `${item.path}\0${reference.kind}\0${rawTarget}`;
+        if (rawTarget && !resolveFile(item.path, rawTarget)) {
+          const key = `${item.path}\0${rawTarget.toLowerCase()}`;
           if (!unresolvedKeys.has(key)) {
             unresolvedKeys.add(key);
             unresolved.push({ source: item.path, target: rawTarget, kind: reference.kind });

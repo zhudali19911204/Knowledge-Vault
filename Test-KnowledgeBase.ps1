@@ -205,6 +205,8 @@ source = source.replace(marker, `
       normalizeObsidianDocumentLink,
       findObsidianVaultDocumentLinks,
       tokenizeFrontmatterRelatedLinks,
+      tokenizeVaultDocumentLinks,
+      splitMarkdownRelationshipSection,
       findMalformedVaultMarkdownLinks,
       upgradeMalformedVaultMarkdownLinks,
     };
@@ -309,11 +311,11 @@ const obsidianRelations = helpers.renderMarkdownSource(
   "Source: [[06_Archive/Sources/AI Dialogues/0601_2026/2026-08-21 1529 - M100.2 Rule|M100.2 source]]\nIndex: [[02_FICO/0203_Transfer Price/_Index|FICO Transfer Price]]",
   "02_FICO/0203_Transfer Price/Current.md",
 );
-if (!obsidianRelations.includes("[M100.2 source](</06_Archive/Sources/AI Dialogues/0601_2026/2026-08-21 1529 - M100.2 Rule.md>)")) {
-  throw new Error(`An Obsidian source link was not rewritten for the built-in reader: ${obsidianRelations}`);
+if (!obsidianRelations.includes("[[06_Archive/Sources/AI Dialogues/0601_2026/2026-08-21 1529 - M100.2 Rule|M100.2 source]]")) {
+  throw new Error(`An Obsidian source link was not preserved for direct Vault link upgrading: ${obsidianRelations}`);
 }
-if (!obsidianRelations.includes("[FICO Transfer Price](</02_FICO/0203_Transfer Price/_Index.md>)")) {
-  throw new Error(`An Obsidian index link was not rewritten for the built-in reader: ${obsidianRelations}`);
+if (!obsidianRelations.includes("[[02_FICO/0203_Transfer Price/_Index|FICO Transfer Price]]")) {
+  throw new Error(`An Obsidian index link was not preserved for direct Vault link upgrading: ${obsidianRelations}`);
 }
 const relativeRelation = helpers.normalizeObsidianDocumentLink(
   "02_FICO/0203_Transfer Price/Current.md",
@@ -335,7 +337,8 @@ if (!fencedRelation.includes("[[02_FICO/0203_Transfer Price/_Index|Index]]")) {
 const frontmatterTokens = helpers.tokenizeFrontmatterRelatedLinks(
   [
     "source_notes:",
-    '  - "[[06_Archive/Sources/Dialogue|Source must remain literal]]"',
+    '  - "[[06_Archive/Sources/Dialogue|Source]]"',
+    'parent_index: "[[03_Areas/0302_RAG/_Index|RAG Index]]"',
     "related:",
     '  - "[[03_Areas/0302_RAG/_Index|RAG]]"',
     '  - "[[05_Skills/0502_Markdown/_Index|Markdown]]"',
@@ -344,18 +347,36 @@ const frontmatterTokens = helpers.tokenizeFrontmatterRelatedLinks(
   "05_Skills/0501_Knowledge Management/Current.md",
 );
 const frontmatterLinks = frontmatterTokens.filter((token) => token.kind === "link");
-if (frontmatterLinks.length !== 2) {
-  throw new Error(`Only frontmatter related entries should become links: ${JSON.stringify(frontmatterTokens)}`);
+if (frontmatterLinks.length !== 4) {
+  throw new Error(`All frontmatter relationship entries should become links: ${JSON.stringify(frontmatterTokens)}`);
 }
-if (frontmatterLinks[0].path !== "03_Areas/0302_RAG/_Index.md" || frontmatterLinks[0].label !== "RAG") {
-  throw new Error(`The first frontmatter related entry was not normalized: ${JSON.stringify(frontmatterLinks[0])}`);
+if (frontmatterLinks[0].path !== "06_Archive/Sources/Dialogue.md" || frontmatterLinks[0].label !== "Source") {
+  throw new Error(`The frontmatter source entry was not normalized: ${JSON.stringify(frontmatterLinks[0])}`);
 }
-if (frontmatterLinks[1].path !== "05_Skills/0502_Markdown/_Index.md" || frontmatterLinks[1].label !== "Markdown") {
-  throw new Error(`The second frontmatter related entry was not normalized: ${JSON.stringify(frontmatterLinks[1])}`);
+if (frontmatterLinks[1].path !== "03_Areas/0302_RAG/_Index.md" || frontmatterLinks[1].label !== "RAG Index") {
+  throw new Error(`The frontmatter parent index was not normalized: ${JSON.stringify(frontmatterLinks[1])}`);
 }
-const sourceNotesText = frontmatterTokens.map((token) => token.kind === "text" ? token.text : token.label).join("");
-if (!sourceNotesText.includes("[[06_Archive/Sources/Dialogue|Source must remain literal]]")) {
-  throw new Error("A non-related frontmatter property was unexpectedly rewritten.");
+if (frontmatterLinks[2].path !== "03_Areas/0302_RAG/_Index.md" || frontmatterLinks[3].path !== "05_Skills/0502_Markdown/_Index.md") {
+  throw new Error(`The frontmatter related entries were not normalized: ${JSON.stringify(frontmatterLinks)}`);
+}
+const bodyRelationship = helpers.splitMarkdownRelationshipSection([
+  "# Card",
+  "",
+  "## Source",
+  "Body",
+  "",
+  "## \u6765\u6e90\u4e0e\u5173\u8054",
+  "",
+  "- Index: [[03_Areas/0301_LLM/_Index|LLM]]",
+  "- Related: [[03_Areas/0301_LLM/RNN|RNN]], [[03_Areas/0302_RAG/Flow|RAG flow]]",
+].join("\n"));
+if (!bodyRelationship || !bodyRelationship.before.includes("## Source") || bodyRelationship.lines.length < 2) {
+  throw new Error(`The body relationship section was not isolated for direct link rendering: ${JSON.stringify(bodyRelationship)}`);
+}
+const bodyRelationshipTokens = helpers.tokenizeVaultDocumentLinks(bodyRelationship.lines.join("\n"));
+const bodyRelationshipLinks = bodyRelationshipTokens.filter((token) => token.kind === "link");
+if (bodyRelationshipLinks.length !== 3 || bodyRelationshipLinks[0].path !== "03_Areas/0301_LLM/_Index.md") {
+  throw new Error(`The body relationship links did not use the frontmatter-compatible direct-link model: ${JSON.stringify(bodyRelationshipLinks)}`);
 }
 const chatDocument = helpers.resolveVaultDocumentPath(
   "",
@@ -435,6 +456,23 @@ if (upgradedAnchors[0].getAttribute("data-knowledge-vault-path") !== "02_FICO/02
 }
 if (upgradedAnchors[1].getAttribute("data-knowledge-vault-path") !== "02_FICO/0203_Transfer Price/_Index.md") {
   throw new Error("The upgraded Obsidian relationship did not keep its resolved Vault path.");
+}
+const renderedAnchorAttributes = new Map([["href", "/03_Areas/0302_RAG/_Index.md"]]);
+const renderedMarkdownAnchor = {
+  nodeType: 1,
+  ownerDocument: { createTreeWalker() { return { nextNode() { return null; } }; } },
+  matches(selector) { return selector === "a[href]"; },
+  querySelectorAll() { return []; },
+  closest() { return null; },
+  hasAttribute(name) { return renderedAnchorAttributes.has(name); },
+  getAttribute(name) { return renderedAnchorAttributes.get(name) ?? null; },
+  setAttribute(name, value) { renderedAnchorAttributes.set(name, value); },
+};
+if (helpers.upgradeMalformedVaultMarkdownLinks(renderedMarkdownAnchor) !== 1) {
+  throw new Error("A rendered Vault Markdown anchor was not upgraded to the direct-link design.");
+}
+if (renderedMarkdownAnchor.getAttribute("data-knowledge-vault-path") !== "03_Areas/0302_RAG/_Index.md") {
+  throw new Error("A rendered Vault Markdown anchor did not receive its direct reader path.");
 }
 const effectCleanups = [];
 plugin.apply({
@@ -997,9 +1035,19 @@ try {
     }
     $firstOrganizedCard = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedCardPaths[0]
     $secondOrganizedCard = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedCardPaths[1]
+    $firstCardTarget = ([string]$organizeApply.cards[0]) -replace '\.md$', ''
+    $secondCardTarget = ([string]$organizeApply.cards[1]) -replace '\.md$', ''
+    $sourceRelativePath = $organizedSource.FullName.Substring($initializedVault.Length).TrimStart('\').Replace('\', '/')
+    $sourceTarget = $sourceRelativePath -replace '\.md$', ''
+    $expectedFirstRelated = "[[$secondCardTarget|Handle Missing Amounts]]"
+    $expectedSecondRelated = "[[$firstCardTarget|Interpret Complete Rows]]"
+    $expectedSourceLink = "[[$sourceTarget|Capture CSV Fixture]]"
     if (
-        $firstOrganizedCard -notmatch '\[\[Handle Missing Amounts\]\]' -or
-        $secondOrganizedCard -notmatch '\[\[Interpret Complete Rows\]\]' -or
+        -not $firstOrganizedCard.Contains($expectedFirstRelated) -or
+        -not $secondOrganizedCard.Contains($expectedSecondRelated) -or
+        -not $firstOrganizedCard.Contains($expectedSourceLink) -or
+        ([regex]::Matches($firstOrganizedCard, [regex]::Escape($expectedFirstRelated))).Count -lt 2 -or
+        ([regex]::Matches($firstOrganizedCard, [regex]::Escape($expectedSourceLink))).Count -lt 2 -or
         $firstOrganizedCard -notmatch 'description: >\r?\n  [^\r\n]*missing-amount remediation' -or
         $firstOrganizedCard -match 'description: >\r?\n  [^\r\n]*the amount is missing'
     ) {
@@ -1009,6 +1057,17 @@ try {
     $organizeNoOp = $organizeNoOpJson | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or $organizeNoOp.status -ne "ok" -or $organizeNoOp.apply_status -ne "no-op") {
         throw "Knowledge organize is not idempotent for an already applied manifest."
+    }
+    $brokenFirstCard = $firstOrganizedCard.Replace($expectedFirstRelated, "[[Handle Missing Amounts]]")
+    [System.IO.File]::WriteAllText($organizedCardPaths[0], $brokenFirstCard, [System.Text.UTF8Encoding]::new($false))
+    $repairPreview = (& python $initializedOrganizeScript repair-links --vault-root $initializedVault) | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0 -or [int]$repairPreview.planned -lt 1) {
+        throw "Knowledge organize repair-links did not preview a resolvable legacy relationship."
+    }
+    $repairApply = (& python $initializedOrganizeScript repair-links --vault-root $initializedVault --apply) | ConvertFrom-Json
+    $repairedFirstCard = Get-Content -Raw -Encoding UTF8 -LiteralPath $organizedCardPaths[0]
+    if ($LASTEXITCODE -ne 0 -or [int]$repairApply.updated -lt 1 -or -not $repairedFirstCard.Contains($expectedFirstRelated)) {
+        throw "Knowledge organize repair-links did not restore full Vault relationship paths."
     }
 
     $lowConfidenceSourcePath = Join-Path $initializedVault "01_Inbox\Low Confidence Source.md"
@@ -1107,7 +1166,7 @@ try {
     )
     [System.IO.File]::WriteAllText(
         (Join-Path $initializedVault "01_Inbox\Stats Pending.md"),
-        "---`ntitle: Stats Pending`ntype: source`nstatus: needs-review`ntags: [stats-test]`n---`n# Stats Pending`n[[Missing Stats Target]]`n![[07_Attachments/reader-image.png]]`n",
+        "---`ntitle: Stats Pending`ntype: source`nstatus: needs-review`nrelated: [`"[[Missing Stats Target]]`"]`ntags: [stats-test]`n---`n# Stats Pending`n[[Missing Stats Target]]`n![[07_Attachments/reader-image.png]]`n",
         [System.Text.UTF8Encoding]::new($false)
     )
     [System.IO.File]::WriteAllBytes(
@@ -1209,6 +1268,7 @@ try {
         'function findObsidianVaultDocumentLinks\(',
         'function tokenizeFrontmatterRelatedLinks\(',
         'function FrontmatterDocumentProperties\(',
+        'function VaultRelationshipSection\(',
         'function findMalformedVaultMarkdownLinks\(',
         'function upgradeMalformedVaultMarkdownLinks\(',
         'data-vault-document-path',
@@ -1410,6 +1470,15 @@ try {
         $graphA.tags -notcontains "graph-test"
     ) {
         throw "The read-only knowledge graph API did not parse nodes, metadata, and explicit Markdown relationships."
+    }
+    $pendingUnresolved = @($knowledgeGraph.unresolved | Where-Object {
+        $_.source -eq "01_Inbox/Stats Pending.md" -and $_.target -eq "Missing Stats Target"
+    })
+    if (
+        $pendingUnresolved.Count -ne 1 -or
+        @($knowledgeGraph.unresolved | Where-Object { $_.target -like "*reader-image.png" }).Count -ne 0
+    ) {
+        throw "The knowledge graph did not deduplicate unresolved links or excluded an existing attachment incorrectly."
     }
     $knowledgeStats = Invoke-RestMethod `
         -Uri ("http://127.0.0.1:{0}/knowledge-vault/api/stats?refresh=1" -f $port) `

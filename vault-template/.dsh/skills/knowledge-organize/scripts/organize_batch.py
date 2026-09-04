@@ -139,6 +139,49 @@ def scalar_value(content: str, key: str) -> str | None:
     return None
 
 
+def frontmatter_values(content: str, key: str) -> list[str]:
+    try:
+        yaml_text, _ = split_frontmatter(content)
+    except OrganizeError:
+        return []
+    for block_key, lines in frontmatter_blocks(yaml_text):
+        if block_key != key or not lines:
+            continue
+        inline = lines[0].split(":", 1)[1].strip()
+        if inline:
+            if inline == "[]":
+                return []
+            if inline.startswith("[") and inline.endswith("]"):
+                try:
+                    parsed = json.loads(inline)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except json.JSONDecodeError:
+                    pass
+            value = inline
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                try:
+                    value = json.loads(value) if value[0] == '"' else value[1:-1]
+                except json.JSONDecodeError:
+                    value = value[1:-1]
+            return [str(value).strip()] if str(value).strip() else []
+        values: list[str] = []
+        for line in lines[1:]:
+            match = re.match(r"^\s*-\s+(.+?)\s*$", line)
+            if match is None:
+                continue
+            value = match.group(1)
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                try:
+                    value = json.loads(value) if value[0] == '"' else value[1:-1]
+                except json.JSONDecodeError:
+                    value = value[1:-1]
+            if str(value).strip():
+                values.append(str(value).strip())
+        return values
+    return []
+
+
 def render_yaml_field(key: str, value: object) -> list[str]:
     if isinstance(value, list):
         if not value:
@@ -155,12 +198,17 @@ def render_yaml_field(key: str, value: object) -> list[str]:
 
 def set_frontmatter_fields(content: str, fields: dict[str, object]) -> str:
     yaml_text, body = split_frontmatter(content)
-    replaced = set(fields)
+    remaining = dict(fields)
+    emitted: set[str] = set()
     lines: list[str] = []
     for key, block in frontmatter_blocks(yaml_text):
-        if key not in replaced:
+        if key not in fields:
             lines.extend(block)
-    for key, value in fields.items():
+        elif key not in emitted:
+            lines.extend(render_yaml_field(key, fields[key]))
+            emitted.add(key)
+            remaining.pop(key, None)
+    for key, value in remaining.items():
         lines.extend(render_yaml_field(key, value))
     return "---\n" + "\n".join(lines).rstrip() + "\n---\n\n" + body.rstrip() + "\n"
 
@@ -397,7 +445,44 @@ def unique_markdown_path(directory: Path, title: str) -> Path:
 
 def wiki_link(path: Path, vault: Path, label: str | None = None) -> str:
     relative = path.relative_to(vault).with_suffix("").as_posix().replace("]", "")
-    return f"[[{relative}|{label or path.stem}]]"
+    safe_label = str(label or path.stem).replace("]", "").replace("|", "-")
+    return f"[[{relative}|{safe_label}]]"
+
+
+def relationship_link_resolver(vault: Path):
+    exact: dict[str, Path] = {}
+    stems: dict[str, list[Path]] = {}
+    for path in markdown_notes(vault):
+        relative = path.relative_to(vault).as_posix()
+        exact[relative.casefold()] = path
+        exact[Path(relative).with_suffix("").as_posix().casefold()] = path
+        stems.setdefault(path.stem.casefold(), []).append(path)
+
+    def resolve(current_path: Path, value: str) -> str:
+        match = re.fullmatch(r"\[\[(?P<target>[^\]|]+)(?:\|(?P<label>[^\]]+))?\]\]", value.strip())
+        if match is None:
+            return value
+        target = match.group("target").split("#", 1)[0].strip().replace("\\", "/")
+        label = (match.group("label") or "").strip()
+        candidates = [target.lstrip("/")]
+        if not target.startswith("/"):
+            current_relative = current_path.parent.relative_to(vault).as_posix()
+            candidates.insert(0, f"{current_relative}/{target}".lstrip("./"))
+        resolved: Path | None = None
+        for candidate in candidates:
+            normalized = Path(candidate).as_posix()
+            resolved = exact.get(normalized.casefold()) or exact.get(
+                Path(normalized).with_suffix("").as_posix().casefold()
+            )
+            if resolved is not None:
+                break
+        if resolved is None:
+            matches = stems.get(Path(target).stem.casefold(), [])
+            if len(matches) == 1:
+                resolved = matches[0]
+        return wiki_link(resolved, vault, label or resolved.stem) if resolved else value
+
+    return resolve
 
 
 def validate_route(route: object) -> str | None:
@@ -594,13 +679,55 @@ def resolved_related(card: dict, manifest: dict) -> list[str]:
     return list(dict.fromkeys(related))
 
 
+def manifest_source_link(manifest: dict) -> str:
+    source = manifest.get("source") or {}
+    source_path = Path(str(source.get("path") or "来源笔记.md")).with_suffix("").as_posix()
+    source_title = str(source.get("title") or Path(source_path).name)
+    safe_title = source_title.replace("]", "").replace("|", "-").strip()
+    return f"[[{source_path.replace(']', '')}|{safe_title}]]"
+
+
+def synchronize_relationship_section(content: str) -> str:
+    source_notes = frontmatter_values(content, "source_notes")
+    parent_values = frontmatter_values(content, "parent_index")
+    parent_index = parent_values[0] if parent_values else ""
+    related = [item for item in frontmatter_values(content, "related") if item != parent_index]
+    _, body = split_frontmatter(content)
+    bounds = level_two_section(body, "来源与关联")
+    preserved: list[str] = []
+    if bounds is not None:
+        section = body[bounds[0]:bounds[1]]
+        for line in section.splitlines()[1:]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if any(
+                stripped.startswith(prefix)
+                for prefix in ("- 来源笔记：", "- 所属索引：", "- 相关知识：")
+            ):
+                continue
+            preserved.append(line.rstrip())
+
+    lines: list[str] = []
+    if source_notes:
+        lines.append(f"- 来源笔记：{'、'.join(source_notes)}")
+    lines.extend(preserved)
+    if parent_index:
+        lines.append(f"- 所属索引：{parent_index}")
+    if related:
+        lines.append(f"- 相关知识：{'、'.join(related)}")
+    if not lines:
+        return content
+    return replace_level_two_section(content, "来源与关联", lines)
+
+
 def render_card(card: dict, manifest: dict, card_id: str) -> str:
     now = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
     confidence = float(card["route_confidence"])
     status = "ready" if confidence >= CONFIDENCE_THRESHOLD else "needs-review"
     route = str(card["route_to"]).replace("\\", "/").rstrip("/")
     package_title = route.split("/")[-1].split("_", 1)[-1]
-    source_title = str(manifest["source"]["title"])
+    source_link = manifest_source_link(manifest)
     related = resolved_related(card, manifest)
     fields: list[str] = [
         "---",
@@ -625,7 +752,7 @@ def render_card(card: dict, manifest: dict, card_id: str) -> str:
             f"parent_index: {yaml_quote(f'[[{route}/_Index|{package_title}]]')}",
         ]
     )
-    fields.extend(render_yaml_field("source_notes", [f"[[{source_title}]]"]))
+    fields.extend(render_yaml_field("source_notes", [source_link]))
     fields.extend(
         [
             f"route_to: {yaml_quote(route)}",
@@ -666,14 +793,56 @@ def render_card(card: dict, manifest: dict, card_id: str) -> str:
             "",
             "## 来源与关联",
             "",
-            f"- 来源笔记：[[{source_title}]]",
+            f"- 来源笔记：{source_link}",
             f"- 来源片段：{evidence}",
             f"- 所属索引：[[{route}/_Index|{package_title}]]",
         ]
     )
-    for item in related:
-        body.append(f"- 相关知识：{item}")
-    return "\n".join(fields + [""] + body).rstrip() + "\n"
+    if related:
+        body.append(f"- 相关知识：{'、'.join(related)}")
+    rendered = "\n".join(fields + [""] + body).rstrip() + "\n"
+    return synchronize_relationship_section(rendered)
+
+
+def update_card_source_link(card_path: Path, source_path: Path, vault: Path, source_title: str) -> bool:
+    content = read_text(card_path)
+    safe_title = source_title.replace("]", "").replace("|", "-")
+    source_link = wiki_link(source_path, vault, safe_title)
+    updated = set_frontmatter_fields(content, {"source_notes": [source_link]})
+    updated = synchronize_relationship_section(updated)
+    if updated == content:
+        return False
+    write_atomic(card_path, updated)
+    return True
+
+
+def update_card_related_links(
+    card_path: Path,
+    card: dict,
+    manifest: dict,
+    card_paths: list[Path],
+    vault: Path,
+) -> bool:
+    related = string_list(card.get("related"))
+    cards = manifest.get("cards", [])
+    for reference in string_list(card.get("related_ids")):
+        match = CARD_REFERENCE_PATTERN.fullmatch(reference)
+        if match is None:
+            continue
+        target_index = int(match.group("number")) - 1
+        if not 0 <= target_index < len(card_paths):
+            continue
+        target_card = cards[target_index] if target_index < len(cards) else {}
+        title = str(target_card.get("title") or card_paths[target_index].stem)
+        related.append(wiki_link(card_paths[target_index], vault, title))
+    related = list(dict.fromkeys(related))
+    content = read_text(card_path)
+    updated = set_frontmatter_fields(content, {"related": related})
+    updated = synchronize_relationship_section(updated)
+    if updated == content:
+        return False
+    write_atomic(card_path, updated)
+    return True
 
 
 def run_router(vault: Path, notes: list[Path], manifest_path: Path, apply_changes: bool) -> dict:
@@ -1181,6 +1350,19 @@ def apply_manifest(args: argparse.Namespace) -> int:
         if existing_source.parent == vault / "01_Inbox" and scalar_value(read_text(existing_source), "status") == "ready":
             run_router(vault, [existing_source], manifest_path, False)
             run_router(vault, [existing_source], manifest_path, True)
+        current_source, current_cards = find_run_notes(vault, run_id)
+        ordered_existing = [
+            current_cards[f"C{index:03d}"]
+            for index in range(1, len(manifest.get("cards", [])) + 1)
+            if f"C{index:03d}" in current_cards
+        ]
+        if len(ordered_existing) == len(manifest.get("cards", [])):
+            for path, card in zip(ordered_existing, manifest.get("cards", [])):
+                update_card_related_links(path, card, manifest, ordered_existing, vault)
+            if current_source is not None:
+                source_title = scalar_value(read_text(current_source), "title") or str(manifest["source"]["title"])
+                for path in ordered_existing:
+                    update_card_source_link(path, current_source, vault, source_title)
         result = verify_run(manifest, vault)
         result["apply_status"] = "no-op" if result["status"] == "ok" else "resume-required"
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -1210,6 +1392,8 @@ def apply_manifest(args: argparse.Namespace) -> int:
 
     _, routed_cards = find_run_notes(vault, run_id)
     final_paths = [routed_cards[f"C{index:03d}"] for index in range(1, len(ordered) + 1)]
+    for path, card in zip(final_paths, manifest.get("cards", [])):
+        update_card_related_links(path, card, manifest, final_paths, vault)
     register_indexes(vault, final_paths, manifest)
     all_routed = all(
         float(card["route_confidence"]) >= CONFIDENCE_THRESHOLD
@@ -1221,6 +1405,12 @@ def apply_manifest(args: argparse.Namespace) -> int:
     if all_routed:
         run_router(vault, [source_path], manifest_path, False)
         run_router(vault, [source_path], manifest_path, True)
+
+    final_source, final_cards = find_run_notes(vault, run_id)
+    if final_source is not None:
+        source_title = scalar_value(read_text(final_source), "title") or str(manifest["source"]["title"])
+        for path in final_cards.values():
+            update_card_source_link(path, final_source, vault, source_title)
 
     result = verify_run(manifest, vault)
     result["apply_status"] = "applied"
@@ -1239,6 +1429,63 @@ def verify_command(args: argparse.Namespace) -> int:
     if args.cleanup and result["status"] == "ok":
         cleanup_artifacts(manifest_path)
     return 0 if result["status"] == "ok" else 1
+
+
+def repair_relationship_links(args: argparse.Namespace) -> int:
+    vault = Path(args.vault_root).expanduser().resolve()
+    resolve_link = relationship_link_resolver(vault)
+    notes = list(markdown_notes(vault))
+    sources_by_run: dict[str, Path] = {}
+    for path in notes:
+        content = read_text(path)
+        run_id = scalar_value(content, "organized_run_id")
+        if run_id and scalar_value(content, "type") == "source":
+            sources_by_run[run_id] = path
+
+    planned: list[str] = []
+    missing_source_runs: set[str] = set()
+    for path in notes:
+        content = read_text(path)
+        if scalar_value(content, "type") != "knowledge-skill":
+            continue
+        relative = path.relative_to(vault)
+        if any("template" in part.casefold() for part in relative.parts):
+            continue
+        fields: dict[str, object] = {}
+        run_id = scalar_value(content, "organized_run_id")
+        source_notes = frontmatter_values(content, "source_notes")
+        source = sources_by_run.get(run_id or "")
+        if source is not None:
+            source_title = scalar_value(read_text(source), "title") or source.stem
+            fields["source_notes"] = [wiki_link(source, vault, source_title)]
+        elif source_notes:
+            fields["source_notes"] = [resolve_link(path, item) for item in source_notes]
+            if run_id:
+                missing_source_runs.add(run_id)
+
+        parent_values = frontmatter_values(content, "parent_index")
+        if parent_values:
+            fields["parent_index"] = resolve_link(path, parent_values[0])
+        related = frontmatter_values(content, "related")
+        if related or "related:" in split_frontmatter(content)[0]:
+            fields["related"] = [resolve_link(path, item) for item in related]
+
+        updated = set_frontmatter_fields(content, fields) if fields else content
+        updated = synchronize_relationship_section(updated)
+        if updated == content:
+            continue
+        planned.append(vault_relative(path, vault))
+        if args.apply:
+            write_atomic(path, updated)
+
+    print(json.dumps({
+        "status": "applied" if args.apply else "preview",
+        "planned": len(planned),
+        "updated": len(planned) if args.apply else 0,
+        "files": planned,
+        "missing_source_runs": sorted(missing_source_runs),
+    }, ensure_ascii=False, indent=2))
+    return 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -1263,6 +1510,13 @@ def parse_args() -> argparse.Namespace:
         if name == "verify":
             command.add_argument("--cleanup", action="store_true")
         command.set_defaults(handler=handler)
+    repair = subparsers.add_parser(
+        "repair-links",
+        help="Normalize source/index/related links and mirror them into 来源与关联.",
+    )
+    repair.add_argument("--vault-root", default=str(default_vault))
+    repair.add_argument("--apply", action="store_true")
+    repair.set_defaults(handler=repair_relationship_links)
     return parser.parse_args()
 
 

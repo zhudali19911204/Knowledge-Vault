@@ -40,5 +40,15 @@ description: 当用户输入“知识理”并希望按自定义方案或 AI 推
 - 不为凑数创建空卡或重复卡。同批卡存在流程与异常、概念与应用、前置与结果等直接关系时，必须用卡片顺序 ID 写 `related`（如 C001 写 `related:["C002"]`）；脚本自动补成双向 Wiki 链接，只写一侧即可。仅关键词相同不关联；没有真实关系时省略。`aliases` 没有内容时省略，跨批和全库关系交给“知识联”。
 - 脚本把 `confidence` 写为 `route_confidence`；值不低于 `0.85` 才自动路由。低置信卡及其来源留在 Inbox，只有全部卡片成功路由才归档来源。
 - 成功路由的新知识包直接登记到根路由索引的对应分类表和该分类的知识包表；自动创建且尚未复核的 `_Index.md` 在表格中标记“待完善”，不另建“自动登记的知识包”区域。
+- 原子卡片 YAML 的 `source_notes`、`parent_index`、`related` 及正文“来源与关联”必须使用同一组 `[[Vault相对路径|显示名]]`；禁止只写普通标题。脚本在卡片路由和来源归档完成后按最终路径统一回写，使 Harness 聊天区和阅读器都能直接点击跳转。
+
+## 旧卡片链接维护
+
+仅在修复历史卡片时运行；默认预览，确认后加 `--apply`。命令会把可唯一解析的关系链接补成完整 Vault 相对路径，并让正文“来源与关联”重新与 YAML 对齐，不会臆造缺失文件。
+
+```powershell
+python ".dsh/skills/knowledge-organize/scripts/organize_batch.py" repair-links --vault-root "."
+python ".dsh/skills/knowledge-organize/scripts/organize_batch.py" repair-links --vault-root "." --apply
+```
 
 完成时只报告来源、方案、卡片数、已路由/待审数量和来源是否归档，不重复卡片正文。
