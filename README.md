@@ -55,8 +55,8 @@ corepack pnpm install --frozen-lockfile
 
 | 版本 | 文件 | 使用方式 |
 |---|---|---|
-| 安装版（推荐） | `Knowledge-Vault-Setup-1.1.2-win-x64.exe` | 双击安装，可选择安装目录；安装后从桌面或开始菜单启动 |
-| 免安装版 | `Knowledge-Vault-Harness-Portable-1.1.2-win-x64.zip` | 完整解压 ZIP，再双击其中的 `Knowledge Vault.exe` |
+| 安装版（推荐） | `Knowledge-Vault-Setup-1.2.9-win-x64.exe` | 双击安装，可选择安装目录；安装后从桌面或开始菜单启动 |
+| 免安装版 | `Knowledge-Vault-Harness-Portable-1.2.9-win-x64.zip` | 完整解压 ZIP，再双击其中的 `Knowledge Vault.exe` |
 
 不要直接在 ZIP 压缩包里运行程序。应用和知识库建议放在两个不同位置，例如：
 
@@ -125,7 +125,7 @@ API 地址、协议和模型 ID 必须与模型服务商文档一致；配置不
 | 对话 | 与知识库 Agent 交流和执行知识指令 |
 | 轨迹 | 查看 Agent 的执行过程和工具调用 |
 | 图谱 | 浏览笔记之间可核验的显式关系 |
-| 统计 | 查看知识规模、分布、健康提醒和最近更新 |
+| 统计 | 查看知识主题与形态分布、健康评分、问题清单和最近更新 |
 | 阅读 | 在主区域阅读从目录、图谱、统计或聊天依据链接打开的 Markdown 文档 |
 | 设置 | 配置模型、API 密钥、插件和 Agent 预设 |
 
@@ -257,11 +257,11 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 
 右侧知识库浏览器会将 `.md` 文件渲染为 Markdown，而不是直接显示源文本；标题、列表、表格、任务清单、引用和代码块使用 Harness 的原生 Markdown 样式，YAML frontmatter 收纳在可展开的“文档属性”中，其中 `related`、`source_notes`、`parent_index` 里的 Obsidian 双链都可以直接点击跳转。原子卡片正文和聊天回答的“来源与关联”统一使用 `[[Vault相对路径|显示名]]`，并显示为醒目的可点击链接。阅读器也兼容 Obsidian 图片嵌入 `![[07_Attachments/...]]` 及标准 Markdown 相对图片和文档链接；图片通过限制在当前 Vault 内、仅允许图片格式的只读接口加载。点击预览标题栏的“放大阅读”，或点击聊天回答、来源笔记、所属索引和相关知识中的 Vault 文档链接，会切换到“统计”右侧的“阅读”页签并在主区域显示文档。阅读器正文中的相对 `.md` 链接也会基于当前文档目录继续在内置阅读器中打开；外部 URL、非 Markdown 文件和越出 Vault 根目录的路径不会被接管。阅读页支持刷新磁盘上的当前文件。非 Markdown 文本仍使用等宽纯文本预览，附件和超过预览大小限制的文件保持只读占位提示。
 
-### 知识统计（第一版）
+### 知识统计
 
-“统计”页签在本机只读扫描当前 Vault，不调用模型也不会修改知识内容。总览显示 Markdown 笔记、可检索知识、Inbox 待处理、附件、显式关系和知识库体积；内容分布按一级目录、`type`、`status` 和热门标签展示。
+“统计”页签在本机只读扫描当前 Vault，不调用模型也不会修改知识内容。总览显示 Markdown 笔记、可检索知识、Inbox 待处理、附件、显式关系和知识库体积，并通过加权健康评分提示整理优先级。知识分布优先展示 02–05 下的一级知识主题，以及依据 `knowledge_kind` 聚合的概念与原理、流程与 SOP、方法与框架、案例与示例、模板与工具和参考资料；不再使用偏技术的 `type` 与零散热门标签作为主要知识分类。
 
-健康提醒包含 Inbox 待处理、`needs-review`、未解析的笔记链接、02–05 主目录中的孤立知识、`knowledge-skill` 必要元数据缺失以及到期复习。点击有问题的文件或最近更新文件，会在右侧知识库浏览器中打开只读预览。“刷新”会重新读取磁盘；初始化或选择其他 Vault 时会同时清空图谱和统计缓存。统计默认忽略 `.git`、`.dsh`、`.agents`、`.obsidian`、`.pnpm-store` 和 `node_modules` 等运行目录。
+主题、知识形态、目录和状态分布均可点击筛选具体文件。健康提醒包含 Inbox 待处理、`needs-review`、未解析的笔记链接、02–05 主目录中的孤立知识、`knowledge-skill` 必要元数据缺失以及到期复习，并提供严重级别、搜索和分页；最近更新可按目录、状态筛选。点击文件会进入内置阅读页。“刷新”会用同一份文件快照重建图谱与统计，初始化或选择其他 Vault 时会同时清空缓存。统计默认忽略 `.git`、`.dsh`、`.agents`、`.obsidian`、`.pnpm-store` 和 `node_modules` 等运行目录。
 
 ## 四个 AI 指令
 
@@ -432,8 +432,8 @@ git commit -m "Initialize knowledge base"
 
 构建成功后会生成：
 
-- `dist/Knowledge-Vault-Setup-1.1.2-win-x64.exe`
-- `dist/Knowledge-Vault-Harness-Portable-1.1.2-win-x64.zip`
+- `dist/Knowledge-Vault-Setup-1.2.9-win-x64.exe`
+- `dist/Knowledge-Vault-Harness-Portable-1.2.9-win-x64.zip`
 - 两个产物各自对应的 `.sha256` 文件
 
 桌面构建会先执行完整自检，再生成独立生产依赖、内置当前 x64 Node.js、构建 NSIS 安装器、启动打包后的 EXE 做隔离冒烟测试，最后校验 ZIP 结构和哈希。若已经单独执行过完整自检，可使用 `-SkipValidation`；若锁定依赖已经安装，可额外使用 `-SkipDependencyInstall`。
@@ -444,7 +444,7 @@ git commit -m "Initialize knowledge base"
 ./Build-Distribution.ps1
 ```
 
-默认产物为 `dist/Knowledge-Vault-Harness-1.1.2.zip` 和对应的 `.sha256` 文件。构建器会检查 ZIP 必需入口，排除 Git 历史、`node_modules`、缓存、Obsidian 私有布局和本机运行状态，并在发现常见凭据文件名时拒绝打包。发布前仍应人工检查知识正文和附件是否适合共享。
+默认产物为 `dist/Knowledge-Vault-Harness-1.2.9.zip` 和对应的 `.sha256` 文件。构建器会检查 ZIP 必需入口，排除 Git 历史、`node_modules`、缓存、Obsidian 私有布局和本机运行状态，并在发现常见凭据文件名时拒绝打包。发布前仍应人工检查知识正文和附件是否适合共享。
 
 ## 系统要求
 

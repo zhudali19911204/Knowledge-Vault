@@ -1324,7 +1324,7 @@ try {
     )
     [System.IO.File]::WriteAllText(
         (Join-Path $graphFixtureRoot "Stats Knowledge.md"),
-        "---`ntitle: Stats Knowledge`ntype: knowledge-skill`nstatus: processed`ndescription: Statistics fixture`nuse_when: [statistics]`ndo_not_use_when: [unrelated]`nsource_notes: [`"[[Graph A]]`"]`ntags: [stats-test]`n---`n# Stats Knowledge`n",
+        "---`ntitle: Stats Knowledge`ntype: knowledge-skill`nknowledge_kind: framework`nstatus: processed`ndescription: Statistics fixture`nuse_when: [statistics]`ndo_not_use_when: [unrelated]`nsource_notes: [`"[[Graph A]]`"]`ntags: [stats-test]`n---`n# Stats Knowledge`n",
         [System.Text.UTF8Encoding]::new($false)
     )
     [System.IO.File]::WriteAllText(
@@ -1332,6 +1332,14 @@ try {
         "---`ntitle: Stats Pending`ntype: source`nstatus: needs-review`nrelated: [`"[[Missing Stats Target]]`"]`ntags: [stats-test]`n---`n# Stats Pending`n[[Missing Stats Target]]`n![[07_Attachments/reader-image.png]]`n",
         [System.Text.UTF8Encoding]::new($false)
     )
+    1..21 | ForEach-Object {
+        $reviewName = "Stats Review {0:D2}.md" -f $_
+        [System.IO.File]::WriteAllText(
+            (Join-Path $initializedVault "01_Inbox\$reviewName"),
+            "---`ntitle: Stats Review $_`ntype: source`nstatus: needs-review`n---`n# Stats Review $_`n",
+            [System.Text.UTF8Encoding]::new($false)
+        )
+    }
     [System.IO.File]::WriteAllBytes(
         (Join-Path $initializedVault "07_Attachments\stats-attachment.bin"),
         [byte[]](1, 2, 3, 4)
@@ -1440,6 +1448,13 @@ try {
         '/image',
         'function KnowledgeStatsView\(\)',
         'kv-stat-cards',
+        'kv-health-summary',
+        'function StatsPager\(',
+        'function matchesDistribution\(',
+        'kv-stats-filter-panel',
+        'distributions\.topics',
+        'distributions\.categories',
+        'setRecentFolder',
         '/stats',
         'function KnowledgeGraphView\(\)',
         'function createGraphSimulation\(',
@@ -1648,9 +1663,14 @@ try {
         -Method Get `
         -TimeoutSec 20
     $statsFolderKeys = @($knowledgeStats.distributions.folders | ForEach-Object { [string]$_.key })
+    $statsTopicKeys = @($knowledgeStats.distributions.topics | ForEach-Object { [string]$_.key })
+    $statsCategoryKeys = @($knowledgeStats.distributions.categories | ForEach-Object { [string]$_.key })
+    $statsDistributionProperties = @($knowledgeStats.distributions.PSObject.Properties | ForEach-Object { [string]$_.Name })
     $statsNeedsReview = @($knowledgeStats.health | Where-Object { $_.id -eq "needs-review" }) | Select-Object -First 1
     $statsUnresolved = @($knowledgeStats.health | Where-Object { $_.id -eq "unresolved-links" }) | Select-Object -First 1
     $statsRecentPaths = @($knowledgeStats.recent | ForEach-Object { [string]$_.path })
+    $statsKnowledgeDocument = @($knowledgeStats.documents | Where-Object { $_.path -eq "02_Domains/0201_GraphTest/Stats Knowledge.md" }) | Select-Object -First 1
+    $expectedFrameworkCategory = -join ([char]0x65B9, [char]0x6CD5, [char]0x4E0E, [char]0x6846, [char]0x67B6)
     if (
         $knowledgeStats.rootName -ne "vault" -or
         [int]$knowledgeStats.overview.markdownNotes -lt 4 -or
@@ -1660,8 +1680,23 @@ try {
         [int]$knowledgeStats.overview.explicitRelations -ne [int]$knowledgeGraph.edgeCount -or
         "01_Inbox" -notin $statsFolderKeys -or
         "02_Domains" -notin $statsFolderKeys -or
+        "02_Domains/0201_GraphTest" -notin $statsTopicKeys -or
+        $expectedFrameworkCategory -notin $statsCategoryKeys -or
+        "topics" -notin $statsDistributionProperties -or
+        "categories" -notin $statsDistributionProperties -or
+        "types" -in $statsDistributionProperties -or
+        "tags" -in $statsDistributionProperties -or
         [int]$statsNeedsReview.count -lt 1 -or
+        [int]$statsNeedsReview.count -le 20 -or
+        @($statsNeedsReview.items).Count -ne [int]$statsNeedsReview.count -or
+        [string]::IsNullOrWhiteSpace([string]$statsNeedsReview.severity) -or
         [int]$statsUnresolved.count -lt 1 -or
+        [int]$knowledgeStats.healthSummary.score -lt 0 -or
+        [int]$knowledgeStats.healthSummary.score -gt 100 -or
+        [string]::IsNullOrWhiteSpace([string]$knowledgeStats.healthSummary.severity) -or
+        $null -eq $statsKnowledgeDocument -or
+        $statsKnowledgeDocument.topic -ne "02_Domains/0201_GraphTest" -or
+        $statsKnowledgeDocument.category -ne $expectedFrameworkCategory -or
         "01_Inbox/Stats Pending.md" -notin $statsRecentPaths
     ) {
         throw "The read-only knowledge statistics API did not return the expected overview, distributions, health checks, and recent files."

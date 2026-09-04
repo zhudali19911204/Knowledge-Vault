@@ -38,6 +38,12 @@ const MAX_GRAPH_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_GRAPH_FILES = 5000;
 const MAX_STATS_FILES = 20000;
 const GRAPH_CACHE_TTL_MS = 5000;
+const KNOWLEDGE_ROOTS = new Set([
+  "02_Domains",
+  "03_Areas",
+  "04_Resources",
+  "05_Skills",
+]);
 const GRAPH_SETTING_RANGES = Object.freeze({
   repulsion: [40, 400],
   linkDistance: [.6, 1.8],
@@ -71,6 +77,7 @@ const GRAPH_METADATA_FIELDS = new Set([
   "maturity",
   "retrieval_priority",
   "review_after",
+  "knowledge_kind",
 ]);
 const SCALAR_METADATA_FIELDS = new Set([
   "title",
@@ -82,6 +89,7 @@ const SCALAR_METADATA_FIELDS = new Set([
   "maturity",
   "retrieval_priority",
   "review_after",
+  "knowledge_kind",
 ]);
 const TEXT_EXTENSIONS = new Set([
   ".md",
@@ -728,11 +736,22 @@ function graphFileResolver(paths) {
   };
 }
 
-async function buildKnowledgeGraph(vaultRoot) {
-  const { files, allFilePaths } = await collectMarkdownFiles(vaultRoot);
+async function buildKnowledgeGraph(vaultRoot, vaultFiles = null) {
+  const snapshot = Array.isArray(vaultFiles)
+    ? {
+      files: vaultFiles.filter((file) => file.extension === ".md"),
+      allFilePaths: vaultFiles.map((file) => file.path),
+    }
+    : await collectMarkdownFiles(vaultRoot);
+  const { files, allFilePaths } = snapshot;
+  if (files.length > MAX_GRAPH_FILES) {
+    throw Object.assign(new Error(`Vault 中的 Markdown 文件超过 ${MAX_GRAPH_FILES} 个，第一阶段图谱暂不加载。`), {
+      statusCode: 413,
+    });
+  }
   const documents = [];
   for (const file of files) {
-    const details = await stat(file.fullPath);
+    const details = Number.isFinite(file.bytes) ? { size: file.bytes } : await stat(file.fullPath);
     if (details.size > MAX_GRAPH_FILE_BYTES) continue;
     const document = parseMarkdownDocument(await readFile(file.fullPath, "utf8"));
     const segments = file.path.split("/");
@@ -763,6 +782,7 @@ async function buildKnowledgeGraph(vaultRoot) {
         maturity: document.metadata.maturity || "",
         retrievalPriority: document.metadata.retrieval_priority || "",
         reviewAfter: document.metadata.review_after || "",
+        knowledgeKind: document.metadata.knowledge_kind || "",
         missingMetadata: document.metadata.type === "knowledge-skill"
           ? knowledgeMetadataFields.filter((field) => !metadataValuePresent(document.metadata[field]))
           : [],
@@ -833,6 +853,72 @@ function distribution(values, limit = 20) {
     .slice(0, limit);
 }
 
+function cleanNumberedFolderName(value) {
+  return String(value || "").replace(/^\d{4,}_/, "").trim() || "未命名主题";
+}
+
+function knowledgeTopic(node) {
+  const segments = String(node?.path || "").split("/");
+  if (!KNOWLEDGE_ROOTS.has(segments[0]) || segments.length < 3 || node?.isIndex) return null;
+  return {
+    key: `${segments[0]}/${segments[1]}`,
+    label: cleanNumberedFolderName(segments[1]),
+  };
+}
+
+function knowledgeCategory(node) {
+  const raw = String(node?.knowledgeKind || "").trim().toLowerCase();
+  const groups = [
+    ["概念与原理", ["concept", "principle", "theory", "definition"]],
+    ["流程与SOP", ["procedure", "sop", "workflow", "checklist", "how-to", "howto"]],
+    ["方法与框架", ["method", "framework", "diagnostic", "decision", "analysis"]],
+    ["案例与示例", ["example", "case", "practice"]],
+    ["模板与工具", ["template", "prompt", "tool"]],
+    ["参考资料", ["reference", "resource", "material"]],
+  ];
+  for (const [label, aliases] of groups) {
+    if (aliases.includes(raw)) return label;
+  }
+  if (/模板|template|prompt/i.test(`${node?.path || ""} ${node?.title || ""}`)) return "模板与工具";
+  if (node?.topFolder === "04_Resources") return "参考资料";
+  return "未分类";
+}
+
+function labeledDistribution(values, limit = 20) {
+  const counts = new Map();
+  for (const value of values) {
+    if (!value?.key) continue;
+    const current = counts.get(value.key) || { key: value.key, label: value.label || value.key, count: 0 };
+    current.count += 1;
+    counts.set(value.key, current);
+  }
+  return Array.from(counts.values())
+    .sort((left, right) => right.count - left.count || left.label.localeCompare(right.label, "zh-CN"))
+    .slice(0, limit);
+}
+
+function healthSummary(health, markdownCount, knowledgeCount, relationCount) {
+  const byId = new Map(health.map((item) => [item.id, item.count]));
+  const factors = [
+    ["inbox", markdownCount, .12],
+    ["needs-review", markdownCount, .16],
+    ["unresolved-links", Math.max(1, relationCount + (byId.get("unresolved-links") || 0)), .22],
+    ["orphans", knowledgeCount, .14],
+    ["metadata", knowledgeCount, .24],
+    ["review-overdue", knowledgeCount, .12],
+  ];
+  const penalty = factors.reduce((sum, [id, base, weight]) => {
+    const ratio = Math.min(1, (byId.get(id) || 0) / Math.max(1, base));
+    return sum + ratio * weight;
+  }, 0);
+  const score = Math.max(0, Math.min(100, Math.round((1 - penalty) * 100)));
+  const issueCount = health.reduce((sum, item) => sum + item.count, 0);
+  if (score >= 90) return { score, label: "健康", severity: "good", issueCount };
+  if (score >= 75) return { score, label: "良好", severity: "notice", issueCount };
+  if (score >= 60) return { score, label: "需关注", severity: "warning", issueCount };
+  return { score, label: "需整理", severity: "critical", issueCount };
+}
+
 function topFolder(path) {
   const separator = path.indexOf("/");
   return separator === -1 ? "/" : path.slice(0, separator);
@@ -853,12 +939,13 @@ function statsItem(node, detail = "") {
   };
 }
 
-async function buildKnowledgeStats(vaultRoot, graph) {
-  const files = await collectVaultFiles(vaultRoot);
+async function buildKnowledgeStats(vaultRoot, graph, vaultFiles = null) {
+  const files = Array.isArray(vaultFiles) ? vaultFiles : await collectVaultFiles(vaultRoot);
   const markdownFiles = files.filter((file) => file.extension === ".md");
   const attachments = files.filter((file) => topFolder(file.path) === "07_Attachments");
   const nodes = graph.nodes || [];
   const nodeByPath = new Map(nodes.map((node) => [node.path, node]));
+  const fileByPath = new Map(markdownFiles.map((file) => [file.path, file]));
   const knowledgeCards = nodes.filter((node) =>
     node.type === "knowledge-skill" && ["ready", "processed", "evergreen"].includes(node.status));
   const inboxPending = nodes.filter((node) =>
@@ -879,11 +966,6 @@ async function buildKnowledgeStats(vaultRoot, graph) {
     const extension = extname(String(item.target || "")).toLowerCase();
     return extension === "" || extension === ".md";
   });
-  const unresolvedItems = unresolved.slice(0, 20).map((item) => {
-    const node = nodeByPath.get(item.source) || { path: item.source };
-    return statsItem(node, `未解析目标：${item.target}`);
-  });
-
   const recent = markdownFiles.map((file) => {
     const node = nodeByPath.get(file.path);
     return {
@@ -894,12 +976,80 @@ async function buildKnowledgeStats(vaultRoot, graph) {
       status: node?.status || "",
       updatedAt: normalizedStatsDate(node?.updated, file.modifiedAt),
     };
-  }).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 12);
+  }).sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 100);
 
   const latestModifiedAt = files.reduce((latest, file) =>
     !latest || file.modifiedAt > latest ? file.modifiedAt : latest, "");
   const folderValues = markdownFiles.map((file) => topFolder(file.path));
-  const tagValues = nodes.flatMap((node) => node.tags || []);
+  const knowledgeNodes = nodes.filter((node) => knowledgeTopic(node) !== null);
+  const documents = nodes.map((node) => {
+    const topic = knowledgeTopic(node);
+    return {
+      path: node.path,
+      title: node.title,
+      folder: node.topFolder,
+      status: node.status || "未设置",
+      topic: topic?.key || "",
+      topicLabel: topic?.label || "",
+      category: topic ? knowledgeCategory(node) : "",
+      updatedAt: normalizedStatsDate(node.updated, fileByPath.get(node.path)?.modifiedAt || ""),
+      isIndex: Boolean(node.isIndex),
+    };
+  });
+
+  const health = [
+    {
+      id: "inbox",
+      label: "Inbox 待处理",
+      severity: "notice",
+      count: inboxPending.length,
+      description: "Inbox 中状态为空、inbox 或 needs-review 的笔记。",
+      items: inboxPending.map((node) => statsItem(node, node.status || "未设置状态")),
+    },
+    {
+      id: "needs-review",
+      label: "需要复核",
+      severity: "warning",
+      count: needsReview.length,
+      description: "status 为 needs-review 的笔记。",
+      items: needsReview.map((node) => statsItem(node)),
+    },
+    {
+      id: "unresolved-links",
+      label: "未解析链接",
+      severity: "critical",
+      count: unresolved.length,
+      description: "指向当前 Vault 中不存在或无法唯一定位目标的显式链接。",
+      items: unresolved.map((item) => {
+        const node = nodeByPath.get(item.source) || { path: item.source };
+        return statsItem(node, `未解析目标：${item.target}`);
+      }),
+    },
+    {
+      id: "orphans",
+      label: "孤立知识",
+      severity: "notice",
+      count: orphanCandidates.length,
+      description: "02–05 主目录中没有任何显式关系的非索引笔记。",
+      items: orphanCandidates.map((node) => statsItem(node)),
+    },
+    {
+      id: "metadata",
+      label: "元数据待补全",
+      severity: "critical",
+      count: missingMetadata.length,
+      description: "knowledge-skill 缺少必要的检索或来源字段。",
+      items: missingMetadata.map((node) => statsItem(node, `缺少：${node.missingMetadata.join("、")}`)),
+    },
+    {
+      id: "review-overdue",
+      label: "复习已到期",
+      severity: "warning",
+      count: overdueReview.length,
+      description: "review_after 已早于当前日期且尚未归档的笔记。",
+      items: overdueReview.map((node) => statsItem(node, `复习日期：${node.reviewAfter}`)),
+    },
+  ];
 
   return {
     rootName: basename(vaultRoot),
@@ -917,59 +1067,21 @@ async function buildKnowledgeStats(vaultRoot, graph) {
     },
     distributions: {
       folders: distribution(folderValues),
-      types: distribution(nodes.map((node) => node.type)),
       statuses: distribution(nodes.map((node) => node.status)),
-      tags: distribution(tagValues, 10),
+      topics: labeledDistribution(knowledgeNodes.map(knowledgeTopic), 12),
+      categories: distribution(knowledgeNodes.map(knowledgeCategory), 10),
     },
-    health: [
-      {
-        id: "inbox",
-        label: "Inbox 待处理",
-        count: inboxPending.length,
-        description: "Inbox 中状态为空、inbox 或 needs-review 的笔记。",
-        items: inboxPending.slice(0, 20).map((node) => statsItem(node, node.status || "未设置状态")),
-      },
-      {
-        id: "needs-review",
-        label: "需要复核",
-        count: needsReview.length,
-        description: "status 为 needs-review 的笔记。",
-        items: needsReview.slice(0, 20).map((node) => statsItem(node)),
-      },
-      {
-        id: "unresolved-links",
-        label: "未解析链接",
-        count: unresolved.length,
-        description: "指向当前 Vault 中不存在或无法唯一定位目标的显式链接。",
-        items: unresolvedItems,
-      },
-      {
-        id: "orphans",
-        label: "孤立知识",
-        count: orphanCandidates.length,
-        description: "02–05 主目录中没有任何显式关系的非索引笔记。",
-        items: orphanCandidates.slice(0, 20).map((node) => statsItem(node)),
-      },
-      {
-        id: "metadata",
-        label: "元数据待补全",
-        count: missingMetadata.length,
-        description: "knowledge-skill 缺少必要的检索或来源字段。",
-        items: missingMetadata.slice(0, 20).map((node) => statsItem(node, `缺少：${node.missingMetadata.join("、")}`)),
-      },
-      {
-        id: "review-overdue",
-        label: "复习已到期",
-        count: overdueReview.length,
-        description: "review_after 已早于当前日期且尚未归档的笔记。",
-        items: overdueReview.slice(0, 20).map((node) => statsItem(node, `复习日期：${node.reviewAfter}`)),
-      },
-    ],
-    recent,
+    health,
+    healthSummary: healthSummary(health, markdownFiles.length, Math.max(1, knowledgeNodes.length), graph.edgeCount || 0),
+    documents,
+    recent: recent.slice(0, 100),
     definitions: {
       knowledgeCards: "type 为 knowledge-skill，且 status 为 ready、processed 或 evergreen。",
       attachments: "07_Attachments 目录中的全部文件。",
       relationships: "Obsidian 双向链接、Markdown 笔记链接及 related、source_notes、parent_index 字段形成的显式关系。",
+      topics: "02–05 主目录下非索引笔记所属的一级编号知识包。",
+      categories: "依据 knowledge_kind 聚合为概念、流程、方法、案例、模板、参考资料；无法识别时计入未分类。",
+      healthScore: "按 Inbox、待复核、未解析链接、孤立知识、元数据完整度和到期复习加权计算，仅用于整理优先级。",
     },
   };
 }
@@ -1023,8 +1135,16 @@ function createStatsHandler(resolveActiveVault, graphCache, statsCache) {
       const cached = statsCache.get(vaultRoot);
       let value = cached?.value;
       if (refresh || !cached || Date.now() - cached.createdAt > GRAPH_CACHE_TTL_MS) {
-        const graph = await resolveCachedGraph(vaultRoot, graphCache, refresh);
-        value = await buildKnowledgeStats(vaultRoot, graph);
+        const graphCached = graphCache.get(vaultRoot);
+        const graphIsFresh = !refresh && graphCached && Date.now() - graphCached.createdAt <= GRAPH_CACHE_TTL_MS;
+        let graph = graphCached?.value;
+        let files = null;
+        if (!graphIsFresh) {
+          files = await collectVaultFiles(vaultRoot);
+          graph = await buildKnowledgeGraph(vaultRoot, files);
+          graphCache.set(vaultRoot, { createdAt: Date.now(), value: graph });
+        }
+        value = await buildKnowledgeStats(vaultRoot, graph, files);
         statsCache.set(vaultRoot, { createdAt: Date.now(), value });
       }
       if (req.method === "HEAD") {

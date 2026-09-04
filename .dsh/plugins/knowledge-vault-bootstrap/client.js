@@ -133,6 +133,10 @@ window.__ModuleLoader__.load({
       .kv-stats-title{font-size:15px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .kv-stats-subtitle{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px}
       .kv-stats-body{box-sizing:border-box;width:min(1180px,100%);margin:0 auto;padding:16px 18px 28px}
+      .kv-health-summary{display:flex;align-items:center;gap:14px;margin-bottom:12px;padding:14px 16px;border:1px solid #88d7bb;border-radius:12px;background:#f1fbf7}
+      .kv-health-summary[data-severity="notice"]{border-color:#9fc2f7;background:#f3f7fe}.kv-health-summary[data-severity="warning"]{border-color:#efbd86;background:#fff7ed}.kv-health-summary[data-severity="critical"]{border-color:#eca1a1;background:#fff3f3}
+      .kv-health-score{min-width:78px;font-size:30px;font-weight:720;line-height:34px;color:#188b67;font-variant-numeric:tabular-nums}.kv-health-summary[data-severity="notice"] .kv-health-score{color:#3978cf}.kv-health-summary[data-severity="warning"] .kv-health-score{color:#b85b13}.kv-health-summary[data-severity="critical"] .kv-health-score{color:#c13f3f}
+      .kv-health-summary-copy{min-width:0;flex:1}.kv-health-summary-title{font-size:13px;font-weight:680}.kv-health-summary-note{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px}
       .kv-stat-cards{display:grid;grid-template-columns:repeat(6,minmax(116px,1fr));gap:10px}
       .kv-stat-card{min-width:0;min-height:86px;box-sizing:border-box;padding:13px 14px;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-2)}
       .kv-stat-label{color:var(--dsw-alias-label-tertiary);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -143,7 +147,8 @@ window.__ModuleLoader__.load({
       .kv-stats-panel-title{font-size:13px;font-weight:650}
       .kv-stats-panel-note{margin-top:3px;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:15px}
       .kv-stat-bars{display:flex;flex-direction:column;gap:9px;margin-top:13px}
-      .kv-stat-bar-row{display:grid;grid-template-columns:minmax(72px,1fr) 3fr 36px;align-items:center;gap:9px;min-height:18px;font-size:11px}
+      .kv-stat-bar-row{width:100%;box-sizing:border-box;display:grid;grid-template-columns:minmax(72px,1fr) 3fr 36px;align-items:center;gap:9px;min-height:26px;padding:4px 5px;border:1px solid transparent;border-radius:7px;background:transparent;color:inherit;text-align:left;font:inherit;font-size:11px;cursor:pointer}
+      .kv-stat-bar-row:hover,.kv-stat-bar-row[data-active="true"]{border-color:var(--dsw-alias-border-l2);background:var(--dsw-alias-interactive-bg-hover)}
       .kv-stat-bar-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--dsw-alias-label-secondary)}
       .kv-stat-bar-track{height:7px;border-radius:5px;background:var(--dsw-alias-interactive-bg-hover);overflow:hidden}
       .kv-stat-bar-fill{height:100%;min-width:2px;border-radius:5px;background:#4d8df7}
@@ -159,22 +164,25 @@ window.__ModuleLoader__.load({
       .kv-health-copy{min-width:0;flex:1}
       .kv-health-label{font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
       .kv-health-description{margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:9px;line-height:13px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+      .kv-health-severity{flex:none;padding:2px 6px;border-radius:9px;background:#eaf2fe;color:#3978cf;font-size:8px}.kv-health-severity[data-severity="warning"]{background:#fff0df;color:#a95613}.kv-health-severity[data-severity="critical"]{background:#fee7e7;color:#b93636}
       .kv-issue-list{margin-top:10px;border-top:1px solid var(--dsw-alias-border-l1);padding-top:8px}
       .kv-issue-list-head{display:flex;align-items:center;gap:8px;margin-bottom:5px;color:var(--dsw-alias-label-secondary);font-size:10px}
+      .kv-stats-filter-panel{margin-top:12px}.kv-stats-toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:9px 0 6px}.kv-stats-control{height:30px;box-sizing:border-box;padding:0 9px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-alias-bg-layer-1);color:inherit;font:inherit;font-size:10px}.kv-stats-search{min-width:180px;flex:1}.kv-stats-clear{height:30px;padding:0 10px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:10px;cursor:pointer}.kv-stats-clear:hover{background:var(--dsw-alias-interactive-bg-hover)}
       .kv-file-row{width:100%;box-sizing:border-box;border:0;border-radius:7px;background:transparent;color:inherit;display:flex;align-items:center;gap:9px;padding:7px 8px;text-align:left;cursor:pointer;font:inherit}
       .kv-file-row:hover{background:var(--dsw-alias-interactive-bg-hover)}
       .kv-file-copy{min-width:0;flex:1}
       .kv-file-title{display:block;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .kv-file-meta{display:block;margin-top:2px;color:var(--dsw-alias-label-tertiary);font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
       .kv-file-time{flex:none;color:var(--dsw-alias-label-tertiary);font-size:9px;white-space:nowrap}
+      .kv-stats-pager{display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:7px;color:var(--dsw-alias-label-tertiary);font-size:9px}.kv-stats-page-button{padding:4px 8px;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;background:transparent;color:inherit;font:inherit;font-size:9px;cursor:pointer}.kv-stats-page-button:disabled{cursor:default;opacity:.45}
       .kv-stats-definitions{margin-top:12px;color:var(--dsw-alias-label-tertiary);font-size:10px;line-height:17px}
       .kv-stats-definitions summary{cursor:pointer;color:var(--dsw-alias-label-secondary)}
       .kv-stats-definitions p{margin:6px 0 0}
       @media(prefers-color-scheme:dark){.kv-graph-performance{background:#332619;color:#ffc387;border-color:#7d542b}}
-      @media(prefers-color-scheme:dark){.kv-health-card:hover,.kv-health-card[data-active="true"]{background:#332619;border-color:#9b6434}}
+      @media(prefers-color-scheme:dark){.kv-health-card:hover,.kv-health-card[data-active="true"]{background:#332619;border-color:#9b6434}.kv-health-summary{background:#173129;border-color:#376f5c}.kv-health-summary[data-severity="notice"]{background:#1e2d42;border-color:#3e608b}.kv-health-summary[data-severity="warning"]{background:#382919;border-color:#7d542b}.kv-health-summary[data-severity="critical"]{background:#3a2020;border-color:#804747}}
       @media(max-width:1050px){.kv-stat-cards{grid-template-columns:repeat(3,minmax(116px,1fr))}.kv-health-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
       @media(max-width:900px){.kv-graph-toolbar{padding-inline:10px}.kv-graph-input{width:170px}.kv-graph-summary{display:none}.kv-graph-footer{padding-inline:10px}.kv-graph-legend{display:none}.kv-stats-grid,.kv-stats-lower{grid-template-columns:1fr}}
-      @media(max-width:620px){.kv-stats-header{padding-inline:10px}.kv-stats-body{padding:12px 10px 22px}.kv-stat-cards{grid-template-columns:repeat(2,minmax(104px,1fr))}.kv-health-grid{grid-template-columns:1fr}}
+      @media(max-width:620px){.kv-stats-header{padding-inline:10px}.kv-stats-body{padding:12px 10px 22px}.kv-stat-cards{grid-template-columns:repeat(2,minmax(104px,1fr))}.kv-health-grid{grid-template-columns:1fr}.kv-health-summary{align-items:flex-start}.kv-stats-search{min-width:100%;width:100%}}
     `;
     if (typeof document !== "undefined" && document.querySelector(`style[data-plugin-css="${STYLE_ID}"]`) === null) {
       const tag = document.createElement("style");
@@ -980,7 +988,66 @@ window.__ModuleLoader__.load({
       window.dispatchEvent(new CustomEvent("knowledge-vault:open-file", { detail: { path } }));
     }
 
-    function StatsDistribution({ title, note, items, color = "#4d8df7", labels = {} }) {
+    const HEALTH_SEVERITY_LABELS = {
+      good: "正常",
+      notice: "提示",
+      warning: "注意",
+      critical: "优先处理",
+    };
+
+    function matchesStatsSearch(item, query) {
+      const needle = String(query || "").trim().toLocaleLowerCase("zh-CN");
+      if (!needle) return true;
+      return [item?.title, item?.path, item?.detail, item?.topicLabel, item?.category]
+        .some((value) => String(value || "").toLocaleLowerCase("zh-CN").includes(needle));
+    }
+
+    function matchesDistribution(item, filter) {
+      if (!filter) return false;
+      if (filter.dimension === "folder") return item.folder === filter.key;
+      if (filter.dimension === "status") return (item.status || "未设置") === filter.key;
+      if (filter.dimension === "topic") return item.topic === filter.key;
+      if (filter.dimension === "category") return item.category === filter.key;
+      return false;
+    }
+
+    function StatsPager({ page, pageCount, total, onPage }) {
+      if (total <= 0) return null;
+      return e("div", { className: "kv-stats-pager" },
+        e("span", null, `共 ${Number(total).toLocaleString("zh-CN")} 项 · ${page}/${pageCount} 页`),
+        e("button", {
+          type: "button",
+          className: "kv-stats-page-button",
+          disabled: page <= 1,
+          onClick: () => onPage(page - 1),
+        }, "上一页"),
+        e("button", {
+          type: "button",
+          className: "kv-stats-page-button",
+          disabled: page >= pageCount,
+          onClick: () => onPage(page + 1),
+        }, "下一页"),
+      );
+    }
+
+    function StatsFileRows({ items, emptyText = "没有匹配的文件", meta, trailing }) {
+      if (!items?.length) return e("div", { className: "kv-stats-empty" }, emptyText);
+      return e("div", null, items.map((item, index) => e("button", {
+        key: `${item.path}:${index}`,
+        type: "button",
+        className: "kv-file-row",
+        onClick: () => openStatsFile(item.path),
+        title: item.path,
+      },
+        e("span", { className: "kv-file-copy" },
+          e("span", { className: "kv-file-title" }, item.title || item.path),
+          e("span", { className: "kv-file-meta" }, meta ? meta(item) : item.detail ? `${item.path} · ${item.detail}` : item.path),
+        ),
+        e("span", { className: "kv-file-time" }, trailing ? trailing(item) : "打开 ›"),
+      )));
+    }
+
+    function StatsDistribution({ title, note, items, dimension, activeFilter, onSelect, color = "#4d8df7", labels = {} }) {
       const visible = (items || []).slice(0, 10);
       const maximum = Math.max(1, ...visible.map((item) => item.count || 0));
       return e("section", { className: "kv-stats-panel" },
@@ -988,12 +1055,17 @@ window.__ModuleLoader__.load({
         note ? e("div", { className: "kv-stats-panel-note" }, note) : null,
         visible.length === 0
           ? e("div", { className: "kv-stats-empty" }, "暂无可统计内容")
-          : e("div", { className: "kv-stat-bars" }, visible.map((item) => e("div", {
+          : e("div", { className: "kv-stat-bars" }, visible.map((item) => {
+            const label = item.label || labels[item.key] || item.key;
+            return e("button", {
             key: item.key,
+            type: "button",
             className: "kv-stat-bar-row",
-            title: `${labels[item.key] || item.key}：${item.count}`,
+            "data-active": activeFilter?.dimension === dimension && activeFilter?.key === item.key ? "true" : "false",
+            title: `${label}：${item.count}；点击查看文件`,
+            onClick: () => onSelect({ dimension, key: item.key, label, title }),
           },
-            e("div", { className: "kv-stat-bar-label" }, labels[item.key] || item.key),
+            e("div", { className: "kv-stat-bar-label" }, label),
             e("div", { className: "kv-stat-bar-track" },
               e("div", {
                 className: "kv-stat-bar-fill",
@@ -1001,7 +1073,8 @@ window.__ModuleLoader__.load({
               }),
             ),
             e("div", { className: "kv-stat-bar-value" }, Number(item.count || 0).toLocaleString("zh-CN")),
-          ))),
+          );
+          })),
       );
     }
 
@@ -1010,6 +1083,15 @@ window.__ModuleLoader__.load({
       const [loading, setLoading] = React.useState(true);
       const [error, setError] = React.useState("");
       const [expandedHealth, setExpandedHealth] = React.useState("");
+      const [healthQuery, setHealthQuery] = React.useState("");
+      const [healthPage, setHealthPage] = React.useState(1);
+      const [distributionFilter, setDistributionFilter] = React.useState(null);
+      const [distributionQuery, setDistributionQuery] = React.useState("");
+      const [distributionPage, setDistributionPage] = React.useState(1);
+      const [recentFolder, setRecentFolder] = React.useState("");
+      const [recentStatus, setRecentStatus] = React.useState("");
+      const [recentPage, setRecentPage] = React.useState(1);
+      const pageSize = 8;
 
       const load = React.useCallback(async (refresh = false) => {
         setLoading(true);
@@ -1018,6 +1100,14 @@ window.__ModuleLoader__.load({
           const result = await getStats(refresh);
           setStats(result);
           setExpandedHealth("");
+          setHealthQuery("");
+          setHealthPage(1);
+          setDistributionFilter(null);
+          setDistributionQuery("");
+          setDistributionPage(1);
+          setRecentFolder("");
+          setRecentStatus("");
+          setRecentPage(1);
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : String(cause));
         } finally {
@@ -1039,7 +1129,32 @@ window.__ModuleLoader__.load({
       const distributions = stats?.distributions || {};
       const health = stats?.health || [];
       const activeHealth = health.find((item) => item.id === expandedHealth);
+      const summary = stats?.healthSummary || {};
+      const documents = stats?.documents || [];
       const number = (value) => Number(value || 0).toLocaleString("zh-CN");
+      const pageOf = (items, requestedPage) => {
+        const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+        const page = Math.min(Math.max(1, requestedPage), pageCount);
+        return { page, pageCount, items: items.slice((page - 1) * pageSize, page * pageSize) };
+      };
+      const filteredDistribution = distributionFilter
+        ? documents.filter((item) => matchesDistribution(item, distributionFilter) && matchesStatsSearch(item, distributionQuery))
+        : [];
+      const distributionResults = pageOf(filteredDistribution, distributionPage);
+      const filteredHealth = activeHealth
+        ? (activeHealth.items || []).filter((item) => matchesStatsSearch(item, healthQuery))
+        : [];
+      const healthResults = pageOf(filteredHealth, healthPage);
+      const filteredRecent = (stats?.recent || []).filter((item) =>
+        (!recentFolder || item.folder === recentFolder) &&
+        (!recentStatus || (item.status || "未设置") === recentStatus));
+      const recentResults = pageOf(filteredRecent, recentPage);
+      const selectDistribution = (filter) => {
+        setDistributionFilter((current) =>
+          current?.dimension === filter.dimension && current?.key === filter.key ? null : filter);
+        setDistributionQuery("");
+        setDistributionPage(1);
+      };
       const statCards = stats ? [
         { label: "Markdown 笔记", value: number(overview.markdownNotes), note: `全部文件 ${number(overview.totalFiles)}` },
         { label: "可检索知识", value: number(overview.knowledgeCards), note: "ready / processed / evergreen" },
@@ -1066,6 +1181,13 @@ window.__ModuleLoader__.load({
         loading && !stats ? e("div", { className: "kv-stats-empty" }, "正在扫描知识库并生成统计…") : null,
         stats ? e("div", { className: "kv-stats-body" },
           error ? e("div", { className: "kv-stats-panel-note", style: { marginBottom: "10px" } }, error) : null,
+          e("section", { className: "kv-health-summary", "data-severity": summary.severity || "good" },
+            e("div", { className: "kv-health-score" }, `${number(summary.score)}/100`),
+            e("div", { className: "kv-health-summary-copy" },
+              e("div", { className: "kv-health-summary-title" }, `知识库健康度 · ${summary.label || "健康"}`),
+              e("div", { className: "kv-health-summary-note" }, `当前共有 ${number(summary.issueCount)} 项提醒；评分用于确定整理优先级，不评价知识内容本身。`),
+            ),
+          ),
           e("div", { className: "kv-stat-cards" }, statCards.map((card) => e("section", {
             key: card.label,
             className: "kv-stat-card",
@@ -1077,31 +1199,71 @@ window.__ModuleLoader__.load({
           ))),
           e("div", { className: "kv-stats-grid" },
             e(StatsDistribution, {
+              title: "知识主题分布",
+              note: "按 02–05 下的一级知识包统计，展示实际知识主题",
+              items: distributions.topics,
+              dimension: "topic",
+              activeFilter: distributionFilter,
+              onSelect: selectDistribution,
+              color: "#4d8df7",
+            }),
+            e(StatsDistribution, {
+              title: "知识形态分布",
+              note: "聚合为概念、流程、方法、案例、模板和参考资料",
+              items: distributions.categories,
+              dimension: "category",
+              activeFilter: distributionFilter,
+              onSelect: selectDistribution,
+              color: "#9b6de3",
+            }),
+            e(StatsDistribution, {
               title: "目录分布",
               note: "Markdown 笔记在知识库主目录中的分布",
               items: distributions.folders,
+              dimension: "folder",
+              activeFilter: distributionFilter,
+              onSelect: selectDistribution,
               labels: STATS_FOLDER_LABELS,
-              color: "#4d8df7",
+              color: "#28a878",
             }),
             e(StatsDistribution, {
               title: "知识状态",
               note: "按 frontmatter status 统计",
               items: distributions.statuses,
-              color: "#28a878",
-            }),
-            e(StatsDistribution, {
-              title: "知识类型",
-              note: "按 frontmatter type 统计",
-              items: distributions.types,
-              color: "#9b6de3",
-            }),
-            e(StatsDistribution, {
-              title: "热门标签",
-              note: "当前知识库使用最多的 10 个标签",
-              items: distributions.tags,
+              dimension: "status",
+              activeFilter: distributionFilter,
+              onSelect: selectDistribution,
               color: "#ed7b2f",
             }),
           ),
+          distributionFilter ? e("section", { className: "kv-stats-panel kv-stats-filter-panel" },
+            e("div", { className: "kv-stats-panel-title" }, `筛选结果 · ${distributionFilter.title} / ${distributionFilter.label}`),
+            e("div", { className: "kv-stats-panel-note" }, "再次点击同一分类可收起；点击文件可直接进入阅读页。"),
+            e("div", { className: "kv-stats-toolbar" },
+              e("input", {
+                className: "kv-stats-control kv-stats-search",
+                type: "search",
+                value: distributionQuery,
+                placeholder: "搜索标题或路径",
+                onChange: (event) => { setDistributionQuery(event.target.value); setDistributionPage(1); },
+              }),
+              e("button", {
+                type: "button",
+                className: "kv-stats-clear",
+                onClick: () => { setDistributionFilter(null); setDistributionQuery(""); setDistributionPage(1); },
+              }, "清除筛选"),
+            ),
+            e(StatsFileRows, {
+              items: distributionResults.items,
+              meta: (item) => `${STATS_FOLDER_LABELS[item.folder] || item.folder} · ${item.status || "未设置"}${item.topicLabel ? ` · ${item.topicLabel}` : ""}`,
+            }),
+            e(StatsPager, {
+              page: distributionResults.page,
+              pageCount: distributionResults.pageCount,
+              total: filteredDistribution.length,
+              onPage: setDistributionPage,
+            }),
+          ) : null,
           e("div", { className: "kv-stats-lower" },
             e("section", { className: "kv-stats-panel" },
               e("div", { className: "kv-stats-panel-title" }, "知识健康提醒"),
@@ -1112,7 +1274,11 @@ window.__ModuleLoader__.load({
                 className: "kv-health-card",
                 "data-active": expandedHealth === item.id ? "true" : "false",
                 disabled: item.count === 0 || !item.items?.length,
-                onClick: () => setExpandedHealth((current) => current === item.id ? "" : item.id),
+                onClick: () => {
+                  setExpandedHealth((current) => current === item.id ? "" : item.id);
+                  setHealthQuery("");
+                  setHealthPage(1);
+                },
                 title: item.description,
               },
                 e("div", { className: "kv-health-count", "data-zero": item.count === 0 ? "true" : "false" }, number(item.count)),
@@ -1120,45 +1286,67 @@ window.__ModuleLoader__.load({
                   e("div", { className: "kv-health-label" }, item.label),
                   e("div", { className: "kv-health-description" }, item.count === 0 ? "当前检查正常" : item.description),
                 ),
+                e("span", {
+                  className: "kv-health-severity",
+                  "data-severity": item.count === 0 ? "good" : item.severity,
+                }, item.count === 0 ? "正常" : HEALTH_SEVERITY_LABELS[item.severity] || "提示"),
               ))),
               activeHealth ? e("div", { className: "kv-issue-list" },
                 e("div", { className: "kv-issue-list-head" },
                   e("strong", null, activeHealth.label),
-                  e("span", null, activeHealth.count > activeHealth.items.length ? `显示前 ${activeHealth.items.length} 项，共 ${activeHealth.count} 项` : `${activeHealth.count} 项`),
+                  e("span", null, `${number(activeHealth.count)} 项`),
                 ),
-                activeHealth.items.map((item, index) => e("button", {
-                  key: `${item.path}:${index}`,
-                  type: "button",
-                  className: "kv-file-row",
-                  onClick: () => openStatsFile(item.path),
-                  title: item.path,
-                },
-                  e("span", { className: "kv-file-copy" },
-                    e("span", { className: "kv-file-title" }, item.title),
-                    e("span", { className: "kv-file-meta" }, item.detail ? `${item.path} · ${item.detail}` : item.path),
-                  ),
-                  e("span", { className: "kv-file-time", "aria-hidden": true }, "打开 ›"),
-                )),
+                e("div", { className: "kv-stats-toolbar" },
+                  e("input", {
+                    className: "kv-stats-control kv-stats-search",
+                    type: "search",
+                    value: healthQuery,
+                    placeholder: "搜索问题文件或原因",
+                    onChange: (event) => { setHealthQuery(event.target.value); setHealthPage(1); },
+                  }),
+                ),
+                e(StatsFileRows, { items: healthResults.items }),
+                e(StatsPager, {
+                  page: healthResults.page,
+                  pageCount: healthResults.pageCount,
+                  total: filteredHealth.length,
+                  onPage: setHealthPage,
+                }),
               ) : null,
             ),
             e("section", { className: "kv-stats-panel" },
               e("div", { className: "kv-stats-panel-title" }, "最近更新"),
-              e("div", { className: "kv-stats-panel-note" }, "优先使用 updated，缺失时使用文件修改时间"),
-              (stats.recent || []).length === 0
-                ? e("div", { className: "kv-stats-empty" }, "暂无 Markdown 笔记")
-                : e("div", { style: { marginTop: "8px" } }, stats.recent.map((item) => e("button", {
-                  key: item.path,
-                  type: "button",
-                  className: "kv-file-row",
-                  onClick: () => openStatsFile(item.path),
-                  title: item.path,
+              e("div", { className: "kv-stats-panel-note" }, "优先使用 updated，缺失时使用文件修改时间；最多读取最近 100 项"),
+              e("div", { className: "kv-stats-toolbar" },
+                e("select", {
+                  className: "kv-stats-control",
+                  value: recentFolder,
+                  onChange: (event) => { setRecentFolder(event.target.value); setRecentPage(1); },
                 },
-                  e("span", { className: "kv-file-copy" },
-                    e("span", { className: "kv-file-title" }, item.title),
-                    e("span", { className: "kv-file-meta" }, `${STATS_FOLDER_LABELS[item.folder] || item.folder}${item.status ? ` · ${item.status}` : ""}`),
-                  ),
-                  e("span", { className: "kv-file-time" }, formatStatsDate(item.updatedAt, true)),
-                ))),
+                  e("option", { value: "" }, "全部目录"),
+                  (distributions.folders || []).map((item) => e("option", { key: item.key, value: item.key }, STATS_FOLDER_LABELS[item.key] || item.key)),
+                ),
+                e("select", {
+                  className: "kv-stats-control",
+                  value: recentStatus,
+                  onChange: (event) => { setRecentStatus(event.target.value); setRecentPage(1); },
+                },
+                  e("option", { value: "" }, "全部状态"),
+                  (distributions.statuses || []).map((item) => e("option", { key: item.key, value: item.key }, item.key)),
+                ),
+              ),
+              e(StatsFileRows, {
+                items: recentResults.items,
+                emptyText: "没有符合筛选条件的最近更新",
+                meta: (item) => `${STATS_FOLDER_LABELS[item.folder] || item.folder}${item.status ? ` · ${item.status}` : ""}`,
+                trailing: (item) => formatStatsDate(item.updatedAt, true),
+              }),
+              e(StatsPager, {
+                page: recentResults.page,
+                pageCount: recentResults.pageCount,
+                total: filteredRecent.length,
+                onPage: setRecentPage,
+              }),
             ),
           ),
           e("details", { className: "kv-stats-definitions" },
@@ -1166,6 +1354,9 @@ window.__ModuleLoader__.load({
             e("p", null, `可检索知识：${stats.definitions?.knowledgeCards || ""}`),
             e("p", null, `附件：${stats.definitions?.attachments || ""}`),
             e("p", null, `显式关系：${stats.definitions?.relationships || ""}`),
+            e("p", null, `知识主题：${stats.definitions?.topics || ""}`),
+            e("p", null, `知识形态：${stats.definitions?.categories || ""}`),
+            e("p", null, `健康评分：${stats.definitions?.healthScore || ""}`),
           ),
         ) : null,
       );
