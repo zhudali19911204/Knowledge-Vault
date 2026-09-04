@@ -891,7 +891,8 @@ try {
     if (
         ($organizePrepareOutput -join "`n") -notmatch 'SOURCE WITH EVIDENCE IDS' -or
         ($organizePrepareOutput -join "`n") -notmatch '<<<S\d{3}' -or
-        ($organizePrepareOutput -join "`n") -notmatch 'do not create a builder'
+        ($organizePrepareOutput -join "`n") -notmatch 'do not create a builder' -or
+        ($organizePrepareOutput -join "`n") -notmatch 'ROUTE PRIORITY:'
     ) {
         throw "Knowledge organize prepare did not return its compact contract and evidence-marked source."
     }
@@ -1058,6 +1059,168 @@ try {
     if ($LASTEXITCODE -ne 0 -or $organizeNoOp.status -ne "ok" -or $organizeNoOp.apply_status -ne "no-op") {
         throw "Knowledge organize is not idempotent for an already applied manifest."
     }
+
+    $initializedRouterScript = Join-Path $initializedVault ".agents\scripts\knowledge_router.py"
+    $routeSelectionPath = Join-Path $smokeRoot "numbered-route-selection.json"
+    $gapRouteNote = Join-Path $initializedVault "01_Inbox\Gap Route.md"
+    [System.IO.File]::WriteAllText(
+        $gapRouteNote,
+        "---`ntitle: Gap Route`ntype: source`nstatus: ready`nroute_to: 02_Domains/0204_Gap Topic`nroute_confidence: 0.95`n---`n# Gap Route`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllText(
+        $routeSelectionPath,
+        ('["01_Inbox/Gap Route.md"]' + "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $savedRouteErrorPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $gapRouteOutput = @(& python $initializedRouterScript --vault-root $initializedVault --notes-file $routeSelectionPath --strict 2>&1)
+        $gapRouteExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $savedRouteErrorPreference
+    }
+    if (
+        $gapRouteExitCode -eq 0 -or
+        ($gapRouteOutput -join "`n") -notmatch "next sequential code '0202'" -or
+        (Test-Path -LiteralPath (Join-Path $initializedVault "02_Domains\0204_Gap Topic"))
+    ) {
+        throw "Knowledge router accepted a new folder that skipped the next sequential number."
+    }
+    Remove-Item -LiteralPath $gapRouteNote -Force
+
+    $legacyFolder = Join-Path $initializedVault "02_Domains\Legacy Topic"
+    New-Item -ItemType Directory -Path $legacyFolder | Out-Null
+    $legacyRouteNote = Join-Path $initializedVault "01_Inbox\Legacy Route.md"
+    [System.IO.File]::WriteAllText(
+        $legacyRouteNote,
+        "---`ntitle: Legacy Route`ntype: source`nstatus: ready`nroute_to: 02_Domains/Legacy Topic`nroute_confidence: 0.95`n---`n# Legacy Route`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllText(
+        $routeSelectionPath,
+        ('["01_Inbox/Legacy Route.md"]' + "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    try {
+        $ErrorActionPreference = "Continue"
+        $legacyRouteOutput = @(& python $initializedRouterScript --vault-root $initializedVault --notes-file $routeSelectionPath --strict 2>&1)
+        $legacyRouteExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $savedRouteErrorPreference
+    }
+    if ($legacyRouteExitCode -eq 0 -or ($legacyRouteOutput -join "`n") -notmatch 'violates the required numbered format') {
+        throw "Knowledge router reused an existing unnumbered folder."
+    }
+    Remove-Item -LiteralPath $legacyRouteNote -Force
+    Remove-Item -LiteralPath $legacyFolder -Force
+
+    $sequentialRouteNote = Join-Path $initializedVault "01_Inbox\Sequential Route.md"
+    [System.IO.File]::WriteAllText(
+        $sequentialRouteNote,
+        "---`ntitle: Sequential Route`ntype: source`nstatus: ready`nroute_to: 02_Domains/Second Topic`nroute_confidence: 0.95`n---`n# Sequential Route`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllText(
+        $routeSelectionPath,
+        ('["01_Inbox/Sequential Route.md"]' + "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    & python $initializedRouterScript --vault-root $initializedVault --notes-file $routeSelectionPath --strict --apply | Out-Null
+    if (
+        $LASTEXITCODE -ne 0 -or
+        -not (Test-Path -LiteralPath (Join-Path $initializedVault "02_Domains\0202_Second Topic\Sequential Route.md")) -or
+        -not (Test-Path -LiteralPath (Join-Path $initializedVault "02_Domains\0202_Second Topic\_Index.md"))
+    ) {
+        throw "Knowledge router did not allocate the next sequential top-level folder number."
+    }
+
+    $filenameMatchNote = Join-Path $initializedVault "01_Inbox\Second Topic Checklist.md"
+    [System.IO.File]::WriteAllText(
+        $filenameMatchNote,
+        "---`ntitle: Unmatched Semantic Title`ntype: source`nstatus: ready`nroute_to: 02_Domains/Unmatched Semantic`nroute_confidence: 0.95`n---`n# Filename match`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllText(
+        $routeSelectionPath,
+        ('["01_Inbox/Second Topic Checklist.md"]' + "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $filenameMatchOutput = @(& python $initializedRouterScript --vault-root $initializedVault --notes-file $routeSelectionPath --strict --apply)
+    $filenameMatchedCard = Join-Path $initializedVault "02_Domains\0202_Second Topic\Second Topic Checklist.md"
+    if (
+        $LASTEXITCODE -ne 0 -or
+        -not (Test-Path -LiteralPath $filenameMatchedCard) -or
+        ($filenameMatchOutput -join "`n") -notmatch '\[filename-match\]' -or
+        (Test-Path -LiteralPath (Join-Path $initializedVault "02_Domains\0203_Unmatched Semantic")) -or
+        (Get-Content -Raw -Encoding UTF8 -LiteralPath $filenameMatchedCard) -notmatch 'route_to: 02_Domains/0202_Second Topic' -or
+        (Get-Content -Raw -Encoding UTF8 -LiteralPath $filenameMatchedCard) -notmatch 'route_reason:'
+    ) {
+        throw "Knowledge router did not prioritize the existing filename-related folder."
+    }
+
+    $salaryFolder = Join-Path $initializedVault "02_Domains\0203_Salary"
+    New-Item -ItemType Directory -Path $salaryFolder -Force | Out-Null
+    $salaryAlias = -join ([char]0x5DE5, [char]0x8D44)
+    $salaryTrigger = $salaryAlias + (-join ([char]0x51ED, [char]0x8BC1))
+    $salaryCardName = "$salaryTrigger Import"
+    [System.IO.File]::WriteAllText(
+        (Join-Path $salaryFolder "_Index.md"),
+        "---`ntitle: Salary`ntype: knowledge-package`nstatus: evergreen`naliases:`n  - $salaryAlias`ntriggers:`n  - $salaryTrigger`n---`n# Salary`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $salaryRouteNote = Join-Path $initializedVault "01_Inbox\$salaryCardName.md"
+    [System.IO.File]::WriteAllText(
+        $salaryRouteNote,
+        "---`ntitle: $salaryCardName`ntype: knowledge-skill`nstatus: ready`nroute_to: 05_Skills/Payroll Workflow`nroute_confidence: 0.95`nroute_reason: AI classified the SOP as a skill`n---`n# $salaryCardName`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllText(
+        $routeSelectionPath,
+        ((ConvertTo-Json -Compress @("01_Inbox/$salaryCardName.md")) + "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    $salaryMatchOutput = @(& python $initializedRouterScript --vault-root $initializedVault --notes-file $routeSelectionPath --strict --apply)
+    $salaryMatchedCard = Join-Path $salaryFolder "$salaryCardName.md"
+    $salaryMatchedContent = if (Test-Path -LiteralPath $salaryMatchedCard) {
+        Get-Content -Raw -Encoding UTF8 -LiteralPath $salaryMatchedCard
+    }
+    else {
+        ""
+    }
+    if (
+        $LASTEXITCODE -ne 0 -or
+        -not (Test-Path -LiteralPath $salaryMatchedCard) -or
+        ($salaryMatchOutput -join "`n") -notmatch '\[filename-match\]' -or
+        (Test-Path -LiteralPath (Join-Path $initializedVault "05_Skills\0504_Payroll Workflow")) -or
+        $salaryMatchedContent -notmatch 'route_to: 02_Domains/0203_Salary' -or
+        $salaryMatchedContent -notmatch 'route_reason:.*02_Domains/0203_Salary'
+    ) {
+        throw "Knowledge router did not prioritize a unique cross-root index alias match."
+    }
+
+    $nestedRouteNote = Join-Path $initializedVault "01_Inbox\Nested Route.md"
+    [System.IO.File]::WriteAllText(
+        $nestedRouteNote,
+        "---`ntitle: Nested Route`ntype: source`nstatus: ready`nroute_to: 02_Domains/Organize Batch/Sub Topic`nroute_confidence: 0.95`n---`n# Nested Route`n",
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    [System.IO.File]::WriteAllText(
+        $routeSelectionPath,
+        ('["01_Inbox/Nested Route.md"]' + "`n"),
+        [System.Text.UTF8Encoding]::new($false)
+    )
+    & python $initializedRouterScript --vault-root $initializedVault --notes-file $routeSelectionPath --strict --apply | Out-Null
+    if (
+        $LASTEXITCODE -ne 0 -or
+        -not (Test-Path -LiteralPath (Join-Path $initializedVault "02_Domains\0201_Organize Batch\020101_Sub Topic\Nested Route.md"))
+    ) {
+        throw "Knowledge router did not extend the parent folder number by exactly two digits."
+    }
+
     $brokenFirstCard = $firstOrganizedCard.Replace($expectedFirstRelated, "[[Handle Missing Amounts]]")
     [System.IO.File]::WriteAllText($organizedCardPaths[0], $brokenFirstCard, [System.Text.UTF8Encoding]::new($false))
     $repairPreview = (& python $initializedOrganizeScript repair-links --vault-root $initializedVault) | ConvertFrom-Json

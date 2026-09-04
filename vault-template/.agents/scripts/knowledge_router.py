@@ -24,6 +24,7 @@ ALLOWED_ROOTS = (
     "05_Skills",
     "06_Archive",
 )
+KNOWLEDGE_ROOTS = ALLOWED_ROOTS[:4]
 FRONTMATTER_PATTERN = re.compile(
     r"\A---\r?\n(?P<yaml>.*?)\r?\n---", re.DOTALL
 )
@@ -128,6 +129,48 @@ def get_frontmatter_value(content: str, key: str) -> str | None:
     return value
 
 
+def get_frontmatter_values(content: str, key: str) -> list[str]:
+    """Read a scalar, inline JSON list, or ordinary YAML block list."""
+
+    frontmatter = FRONTMATTER_PATTERN.match(content)
+    if frontmatter is None:
+        return []
+    yaml_text = frontmatter.group("yaml")
+    property_pattern = re.compile(
+        rf"^{re.escape(key)}:[ \t]*(?P<value>[^\r\n]*)$", re.MULTILINE
+    )
+    property_match = property_pattern.search(yaml_text)
+    if property_match is None:
+        return []
+
+    inline = property_match.group("value").strip()
+    if inline:
+        if inline == "[]":
+            return []
+        if inline.startswith("[") and inline.endswith("]"):
+            try:
+                parsed = json.loads(inline)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                return [str(value).strip() for value in parsed if str(value).strip()]
+        return [inline.strip("\"'").strip()]
+
+    values: list[str] = []
+    tail = yaml_text[property_match.end():]
+    for line in tail.splitlines():
+        if not line.strip():
+            continue
+        if not line.startswith((" ", "\t")):
+            break
+        item = re.match(r"^[ \t]*-[ \t]*(?P<value>.+?)[ \t]*$", line)
+        if item is not None:
+            value = item.group("value").strip().strip("\"'").strip()
+            if value:
+                values.append(value)
+    return values
+
+
 def has_frontmatter_key(content: str, key: str) -> bool:
     frontmatter = FRONTMATTER_PATTERN.match(content)
     if frontmatter is None:
@@ -205,11 +248,112 @@ def selected_notes(vault: Path, inbox: Path, notes_file: Path) -> list[Path]:
     return selected
 
 
-def resolve_numbered_parts(vault: Path, raw_parts: list[str]) -> list[str]:
-    """Resolve existing folders and number every newly requested folder.
+def normalized_name(value: str) -> str:
+    return re.sub(r"[\W_]+", "", value, flags=re.UNICODE).casefold()
 
-    Legacy unnumbered folders are reused when their exact name already exists.
-    New folders use the nearest numbered ancestor plus a two-digit sequence.
+
+def meaningful_folder_label(value: str) -> bool:
+    cjk_count = len(re.findall(r"[\u3400-\u9fff]", value))
+    return cjk_count >= 2 or len(value) >= 3
+
+
+def valid_numbered_directories(root: Path, number_seed: str):
+    if not root.is_dir():
+        return
+    pattern = re.compile(
+        rf"^(?P<code>{re.escape(number_seed)}\d{{2}})_(?P<label>.+)$"
+    )
+    for child in sorted(
+        (path for path in root.iterdir() if path.is_dir()),
+        key=lambda path: path.name.casefold(),
+    ):
+        match = pattern.fullmatch(child.name)
+        if match is None:
+            continue
+        yield child, match.group("label")
+        yield from valid_numbered_directories(child, match.group("code"))
+
+
+def term_match_strength(names: list[str], term: str) -> int:
+    normalized_term = normalized_name(term)
+    if not meaningful_folder_label(normalized_term):
+        return 0
+    if any(normalized_name(name) == normalized_term for name in names):
+        return 2
+
+    contains_cjk = re.search(r"[\u3400-\u9fff]", term) is not None
+    if contains_cjk:
+        return int(any(normalized_term in normalized_name(name) for name in names))
+
+    term_words = re.sub(r"[\W_]+", " ", term, flags=re.UNICODE).casefold().strip()
+    if not term_words:
+        return 0
+    pattern = re.compile(rf"(?<!\w){re.escape(term_words)}(?!\w)")
+    return int(
+        any(
+            pattern.search(
+                re.sub(r"[\W_]+", " ", name, flags=re.UNICODE).casefold().strip()
+            )
+            is not None
+            for name in names
+        )
+    )
+
+
+def directory_terms(directory: Path, label: str) -> list[tuple[str, int]]:
+    """Return match terms with directory names ranked above index metadata."""
+
+    terms = [(label, 2)]
+    index_path = directory / "_Index.md"
+    if not index_path.is_file():
+        return terms
+    try:
+        content = read_note(index_path)
+    except OSError:
+        return terms
+
+    title = get_frontmatter_value(content, "title")
+    if title:
+        terms.append((title, 2))
+    for key in ("aliases", "triggers"):
+        terms.extend((value, 1) for value in get_frontmatter_values(content, key))
+    return terms
+
+
+def filename_related_directory(vault: Path, names: list[str]) -> Path | None:
+    """Find one high-confidence existing directory across active knowledge roots."""
+
+    names = [value for value in names if normalized_name(value)]
+    if not names:
+        return None
+
+    candidates: dict[Path, tuple[int, int, int, int]] = {}
+    for root_name in KNOWLEDGE_ROOTS:
+        root = vault / root_name
+        root_code = root_name.split("_", maxsplit=1)[0]
+        for directory, label in valid_numbered_directories(root, root_code):
+            depth = len(directory.relative_to(root).parts)
+            for term, term_priority in directory_terms(directory, label):
+                strength = term_match_strength(names, term)
+                if strength == 0:
+                    continue
+                score = (strength, term_priority, len(normalized_name(term)), depth)
+                if score > candidates.get(directory, (0, 0, 0, 0)):
+                    candidates[directory] = score
+
+    if not candidates:
+        return None
+    best_score = max(candidates.values())
+    best_paths = [path for path, score in candidates.items() if score == best_score]
+    return best_paths[0] if len(best_paths) == 1 else None
+
+
+def resolve_numbered_parts(vault: Path, raw_parts: list[str]) -> list[str]:
+    """Resolve only valid numbered folders and allocate the next sequence.
+
+    Every level extends its parent's numeric code by exactly two digits. New
+    folders always use max(existing sequence) + 1; retired numbers are never
+    reused and callers cannot create gaps with a guessed explicit number.
     """
 
     resolved = [raw_parts[0]]
@@ -229,8 +373,18 @@ def resolve_numbered_parts(vault: Path, raw_parts: list[str]) -> list[str]:
         if exact is not None:
             component = exact.name
             match = NUMBERED_COMPONENT_PATTERN.fullmatch(component)
-            if match is not None:
-                number_seed = match.group("code")
+            if match is None:
+                raise ValueError(
+                    f"existing folder '{component}' violates the required numbered format "
+                    f"'{number_seed}NN_label'"
+                )
+            existing_code = match.group("code")
+            if not existing_code.startswith(number_seed) or len(existing_code) != len(number_seed) + 2:
+                raise ValueError(
+                    f"folder number '{existing_code}' does not extend parent number "
+                    f"'{number_seed}' by two digits"
+                )
+            number_seed = existing_code
             resolved.append(component)
             parent /= component
             continue
@@ -266,6 +420,14 @@ def resolve_numbered_parts(vault: Path, raw_parts: list[str]) -> list[str]:
             parent /= component
             continue
 
+        next_sequence = max(
+            (sequence for sequence, _, _ in numbered_children),
+            default=0,
+        ) + 1
+        if next_sequence > 99:
+            raise ValueError(f"folder sequence under '{parent}' exceeds 99")
+        next_code = f"{number_seed}{next_sequence:02d}"
+
         requested_number = NUMBERED_COMPONENT_PATTERN.fullmatch(requested)
         if requested_number is not None:
             expected_code = requested_number.group("code")
@@ -279,16 +441,15 @@ def resolve_numbered_parts(vault: Path, raw_parts: list[str]) -> list[str]:
                 for _, _, name in numbered_children
             ):
                 raise ValueError(f"folder number '{expected_code}' is already in use")
+            if expected_code != next_code:
+                raise ValueError(
+                    f"new folder number must be the next sequential code '{next_code}', "
+                    f"not '{expected_code}'"
+                )
             component = requested
             number_seed = expected_code
         else:
-            next_sequence = max(
-                (sequence for sequence, _, _ in numbered_children),
-                default=0,
-            ) + 1
-            if next_sequence > 99:
-                raise ValueError(f"folder sequence under '{parent}' exceeds 99")
-            number_seed = f"{number_seed}{next_sequence:02d}"
+            number_seed = next_code
             component = f"{number_seed}_{requested}"
 
         resolved.append(component)
@@ -297,7 +458,13 @@ def resolve_numbered_parts(vault: Path, raw_parts: list[str]) -> list[str]:
     return resolved
 
 
-def safe_destination(vault: Path, route: str) -> tuple[Path, str]:
+def safe_destination(
+    vault: Path,
+    route: str,
+    *,
+    note_name: str = "",
+    note_title: str = "",
+) -> tuple[Path, str, bool]:
     route = route.strip()
     if PureWindowsPath(route).is_absolute() or PurePosixPath(route).is_absolute():
         raise ValueError("route_to must be a relative path")
@@ -308,14 +475,35 @@ def safe_destination(vault: Path, route: str) -> tuple[Path, str]:
     if raw_parts[0] not in ALLOWED_ROOTS:
         raise ValueError(f"route root '{raw_parts[0]}' is not allowed")
 
-    resolved_parts = resolve_numbered_parts(vault, raw_parts)
-    destination = vault.joinpath(*resolved_parts).resolve(strict=False)
+    filename_match = (
+        filename_related_directory(vault, [note_name, note_title])
+        if raw_parts[0] in KNOWLEDGE_ROOTS
+        else None
+    )
+    matched_by_filename = False
+    try:
+        resolved_parts = resolve_numbered_parts(vault, raw_parts)
+        destination = vault.joinpath(*resolved_parts).resolve(strict=False)
+    except ValueError:
+        if filename_match is None:
+            raise
+        destination = filename_match.resolve()
+        resolved_parts = list(destination.relative_to(vault).parts)
+        matched_by_filename = True
+
+    if filename_match is not None and not matched_by_filename:
+        try:
+            destination.relative_to(filename_match)
+        except ValueError:
+            destination = filename_match.resolve()
+            resolved_parts = list(destination.relative_to(vault).parts)
+            matched_by_filename = True
     vault_key = os.path.normcase(str(vault))
     destination_key = os.path.normcase(str(destination))
     if os.path.commonpath((vault_key, destination_key)) != vault_key:
         raise ValueError("destination is outside the vault")
 
-    return destination, "/".join(resolved_parts)
+    return destination, "/".join(resolved_parts), matched_by_filename
 
 
 def unique_destination(directory: Path, file_name: str) -> Path:
@@ -535,7 +723,12 @@ def route_notes(
             continue
 
         try:
-            destination_directory, relative_route = safe_destination(vault, route)
+            destination_directory, relative_route, matched_by_filename = safe_destination(
+                vault,
+                route,
+                note_name=note.stem,
+                note_title=get_frontmatter_value(content, "title") or "",
+            )
         except ValueError as error:
             skipped += 1
             print(f"[SKIPPED] {note.name} - {error}", file=sys.stderr)
@@ -543,7 +736,8 @@ def route_notes(
 
         if not apply_changes:
             planned += 1
-            print(f"[DRY-RUN] {note.name} -> {relative_route}")
+            match_label = " [filename-match]" if matched_by_filename else ""
+            print(f"[DRY-RUN] {note.name} -> {relative_route}{match_label}")
             continue
 
         destination_directory.mkdir(parents=True, exist_ok=True)
@@ -552,6 +746,11 @@ def route_notes(
             print(f"[INDEX] {created_index.relative_to(vault).as_posix()}")
         content = set_frontmatter_value(content, "status", "processed")
         content = set_frontmatter_value(content, "route_to", relative_route)
+        if matched_by_filename:
+            existing_reason = get_frontmatter_value(content, "route_reason") or ""
+            match_reason = f"文件名或标题优先匹配现有目录名称/索引别名：{relative_route}"
+            route_reason = f"{existing_reason}；{match_reason}" if existing_reason else match_reason
+            content = set_frontmatter_value(content, "route_reason", route_reason)
         routed_at = datetime.now().astimezone().isoformat(timespec="seconds")
         content = set_frontmatter_value(content, "routed_at", routed_at)
         write_note(note, content)
@@ -559,7 +758,8 @@ def route_notes(
         destination = unique_destination(destination_directory, note.name)
         shutil.move(str(note), str(destination))
         moved += 1
-        print(f"[MOVED] {destination.relative_to(vault).as_posix()}")
+        match_label = " [filename-match]" if matched_by_filename else ""
+        print(f"[MOVED] {destination.relative_to(vault).as_posix()}{match_label}")
 
     mode = "apply" if apply_changes else "dry-run"
     print(

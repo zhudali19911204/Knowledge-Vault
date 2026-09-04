@@ -1285,6 +1285,7 @@ def prepare_manifest(args: argparse.Namespace) -> int:
     print('"includes":["content in scope"],"excludes":["content outside scope"],')
     print('"conclusion":"...","body":"Markdown details","limits":"..."}]}' )
     print("YAML SEMANTICS: use/avoid are positive/negative retrieval situations, never workflow steps or warnings; includes/excludes are content scope.")
+    print("ROUTE PRIORITY: write semantic folder labels without guessed numeric prefixes. Before applying that judgment, the router searches every valid existing folder under 02_Domains through 05_Skills; one strong filename/title match against the folder name or its _Index title/aliases/triggers wins across roots. If no unique high-confidence match exists, follow the semantic route and only then allocate the next strict two-digit sequence. Never override 06_Archive source archival.")
     print("QUALITY GATE: silently verify one stable question per card, evidence-supported claims, distinct boundaries, complete retrieval fields, no duplicates, and direct same-run relationships.")
     print('For a direct sibling relation (workflow-exception, concept-application, prerequisite-result), add "related":["C002"]; one direction is enough and apply makes it reciprocal. Do not link merely because cards share keywords.')
     print("Optional per card: aliases. For SOP, kind=procedure; keep one complete workflow, its inputs, ordered steps, parameters, verification, exceptions, and each real image with its step.")

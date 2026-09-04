@@ -43,3 +43,5 @@ Vault 根目录始终是本 `AGENTS.md` 所在目录。不得沿用其他项目�
 9. 正式 `knowledge-skill` 卡片必须具备完整的 Skill 式检索属性，不因拆卡方案不同而降低要求。
 10. 图片、截图和图表本体保存在 `07_Attachments/`；Markdown 卡片只嵌入或链接实际存在的附件。
 11. 路由前确认 `route_to`、`route_reason` 和 `route_confidence` 与内容一致；低置信度内容不得强行路由。
+12. `02_Domains` 至 `06_Archive` 下的每级知识目录必须把父级数字编号扩展两位并顺序递增，例如 `02_Domains/0201_主题/020101_子主题`；禁止新建或复用无编号、跳号、重号及编号层级错误的目录。
+13. 路由前先跨 `02_Domains` 至 `05_Skills` 检查现有合规目录。目录语义名与文件名或 YAML `title` 的强匹配优先于 AI 语义分类，目录 `_Index.md` 的 `title`、`aliases`、`triggers` 用于跨语言和同义词匹配；不存在唯一高相关候选时才保留语义路由。不得用此规则覆盖 `06_Archive` 来源归档。
