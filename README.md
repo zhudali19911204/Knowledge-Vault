@@ -222,6 +222,12 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 
 安装后可用 `python ".dsh/skills/knowledge-capture/scripts/capture.py" --runtime-info` 检查隔离环境。图片识别由当前会话的多模态模型完成，不安装也不调用 Tesseract；当前模型不支持图片输入时，需要先切换模型。
 
+### 知识收转换 PDF 时漏掉流程图、示意图
+
+PDF 中的线条、形状等矢量内容可能没有普通图片文件。知识收预检会检测这些绘制路径，即使页面有文字，也会提示选择原图或多模态模式。转换时把矢量图所在区域连同区内文字、位图渲染为 PNG，保留区域外正文，并在转换说明中列出页码；区内内容不再重复输出。
+
+同页多个矢量图可能合并为一个区域；背景或页框可能使区域扩展至整页。该方式保留可见内容，生成的图片不再具有可编辑的矢量结构。
+
 ### 知识收打开 PPTX 报 `PackageNotFoundError` 或拒绝访问
 
 先用知识收的 `capture.py --inspect "<源文件>"` 检查。`source_not_found` 表示路径不存在或不是文件；`source_unreadable` 表示文件无法读取，尚未开始解析，应检查是否被 Office/WPS 或预览窗口占用，以及读取权限、OneDrive 本地可用状态；`invalid_document_package` 表示文件可读但文档包无效，需要核对真实格式、是否加密或损坏。
@@ -236,7 +242,7 @@ PPT 中的图片对象可能只有外部链接，或缺少可读取的内嵌图�
 
 已有 Vault 使用自己的 `.dsh/skills/knowledge-capture/` 文件；只更新本工程模板不会自动更新已初始化的 Vault。
 
-可运行 `python -B Test-KnowledgeCapture.py` 验证文件占用、中文路径、无效文档包、图片异常处理、原图/多模态流程和文本写入。项目自检也会执行该测试，并优先使用已安装的知识收隔离环境；运行环境没有 `python-pptx` 时会明确跳过 PPT 测试，不自动安装依赖。测试仅使用临时生成的文档。
+可运行 `python -B Test-KnowledgeCapture.py` 验证文件占用、中文路径、无效文档包、图片异常处理、PDF 矢量图与旋转/裁剪、原图/多模态流程和文本写入。项目自检也会执行该测试，并优先使用已安装的知识收隔离环境；运行环境没有 `python-pptx` 或 PyMuPDF 时会明确跳过对应格式的测试，不自动安装依赖。测试仅使用临时生成的文档。
 
 ### 卸载重装后，原知识库已经被删除
 
@@ -312,6 +318,7 @@ PPT 中的图片对象可能只有外部链接，或缺少可读取的内嵌图�
 - `.dsh/plugins/knowledge-vault-bootstrap/assets/knowledge-vault-favicon.png` 是由灰橙 Z Logo 制作的透明图标，用于浏览器 favicon 和左侧栏 24×24 品牌标记；页面加载后标签标题固定为 `Knowledge Vault`。
 - 初始化后的 `05_Skills/` 仍是 Obsidian 内的可复用知识；`.dsh/skills/` 是 Agent 运行时说明，两者不混用。
 - `vault-template/.agents/scripts/knowledge_router.py` 是模板中的路由器，初始化后位于用户 Vault 的 `.agents/scripts/`。
+- 对话中临时创建的辅助脚本和中间文件放在当前工作区的 `.agents/tmp/<任务标识>/`，任务结束回复前清理并核验；该目录不进入 Git、初始化副本或发布包。
 - `vault-template/.dsh/skills/knowledge-organize/scripts/organize_batch.py` 将单篇来源的紧凑卡片 JSON 批量落盘，并把新知识包直接登记到对应分类表；未复核包显示“待完善”，不再另建“自动登记的知识包”区域。
 - `vault-template/.dsh/skills/knowledge-capture/scripts/capture.py` 在 Harness 用户数据目录管理文档转换专用虚拟环境，统一调用转换器，避免运行时把依赖写入系统 Python 或 Vault。
 - 模型设置、API 密钥、会话和生成的 DSH patch 保存在 `%LOCALAPPDATA%\KnowledgeVaultHarness`，不进入发布包或 Vault。

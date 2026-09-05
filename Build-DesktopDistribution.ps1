@@ -124,6 +124,7 @@ while ($pendingDirectories.Count -gt 0) {
     foreach ($directory in Get-ChildItem -LiteralPath $currentDirectory.FullName -Force -Directory) {
         if ($directory.Name -in $excludedDirectoryNames) { continue }
         $relative = $directory.FullName.Substring($productRoot.Length).TrimStart('\', '/')
+        if ($relative -match '(^|[\\/])\.agents[\\/]tmp$') { continue }
         if ($relative -match '(^|[\\/])\.obsidian[\\/]cache$') { continue }
         $pendingDirectories.Push($directory)
     }

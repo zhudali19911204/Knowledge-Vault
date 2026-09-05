@@ -185,6 +185,7 @@ async function assertTemplateTreeSafe(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   for (const entry of entries) {
     const source = join(directory, entry.name);
+    if (/(^|[\\/])\.agents[\\/]tmp([\\/]|$)/.test(source)) continue;
     if (entry.isSymbolicLink()) {
       throw new Error(`Knowledge Vault template contains a symbolic link: ${source}`);
     }
@@ -211,6 +212,7 @@ async function copyTemplateIntoEmptyVault(templateRoot, vaultRoot) {
         errorOnExist: true,
         force: false,
         preserveTimestamps: true,
+        filter: (source) => !/(^|[\\/])\.agents[\\/]tmp([\\/]|$)/.test(source),
       });
     }
     for (const entry of templateEntries) {

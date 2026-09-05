@@ -5,6 +5,8 @@ node_modules/
 dist/
 __pycache__/
 *.pyc
+.agents/tmp/
+vault-template/.agents/tmp/
 .obsidian/workspace.json
 .obsidian/workspace-mobile.json
 .obsidian/cache/

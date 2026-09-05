@@ -219,12 +219,16 @@ def inspect_source(source: Path) -> dict:
 
             with fitz.open(source) as document:
                 result["image_count"] = sum(len(page.get_images(full=True)) for page in document)
+                result["vector_pages"] = [
+                    number for number, page in enumerate(document, 1)
+                    if pdf_vector_bounds(page) is not None
+                ]
                 if result["image_count"] == 0:
                     result["image_count"] = sum(1 for page in document if not page.get_text().strip())
     if extension == ".pptx" and not module_available("pptx"):
         result["missing_dependencies"].append("python-pptx")
     result["requires_image_mode"] = extension in MIXED_LAYOUT and (
-        result["image_count"] is None or int(result["image_count"] or 0) > 0
+        result["image_count"] is None or int(result["image_count"] or 0) > 0 or bool(result.get("vector_pages"))
     )
     return result
 
@@ -576,20 +580,84 @@ def pdf_text_block(block: dict) -> str:
     return "\n".join(lines)
 
 
+def pdf_vector_bounds(page):
+    """Union visible drawing bounds in unrotated, crop-relative coordinates."""
+    import fitz
+
+    visible = page.rect * page.derotation_matrix
+    region = None
+    for drawing in page.get_drawings():
+        if drawing.get("rect") is None:
+            continue
+        rect = fitz.Rect(drawing["rect"])
+        # Pad before testing emptiness: a horizontal/vertical path has zero
+        # height/width. Stroke joins can extend beyond its centerline bounds.
+        padding = 2.0 + abs(float(drawing.get("width") or 0)) * 5.0
+        rect = fitz.Rect(rect.x0 - padding, rect.y0 - padding, rect.x1 + padding, rect.y1 + padding) & visible
+        if not rect.is_empty:
+            region = rect if region is None else region | rect
+    return region
+
+
+def pdf_vector_block(page, blocks: list[dict]) -> tuple[dict | None, set[int]]:
+    """Include whole intersecting text/image blocks to avoid clipping labels."""
+    import fitz
+
+    region = pdf_vector_bounds(page)
+    covered: set[int] = set()
+    if region is None:
+        return None, covered
+    visible = page.rect * page.derotation_matrix
+    # Expanding for one label can touch another block. Reach a fixed point so
+    # every block covered by the rendered region is emitted exactly once.
+    while True:
+        previous_count = len(covered)
+        for index, block in enumerate(blocks):
+            if index in covered or "bbox" not in block:
+                continue
+            if not (block.get("type") == 0 and pdf_text_block(block)) and not (block.get("type") == 1 and block.get("image")):
+                continue
+            rect = fitz.Rect(block["bbox"]) & visible
+            if rect.is_empty or not region.intersects(rect):
+                continue
+            covered.add(index)
+            padded = fitz.Rect(rect.x0 - 1, rect.y0 - 1, rect.x1 + 1, rect.y1 + 1) & visible
+            region = region | padded
+        if len(covered) == previous_count:
+            break
+    return {"type": "vector", "bbox": tuple(region)}, covered
+
+
 def convert_pdf(source: Path, stager: ImageStager) -> Conversion:
     if not module_available("fitz"):
         raise DependencyError("PDF 转换需要 PyMuPDF；请按 scripts/requirements.txt 安装。")
     import fitz
 
     pages: list[str] = []
+    vector_pages: list[int] = []
     warnings = ["PDF 的多栏、复杂表格、公式和矢量图可能无法完全恢复原始版式。"]
     with fitz.open(source) as document:
         for page_number, page in enumerate(document, 1):
             content = [f"## 第 {page_number} 页"]
-            blocks = sorted(page.get_text("dict").get("blocks", []), key=lambda item: (item.get("bbox", [0, 0])[1], item.get("bbox", [0, 0])[0]))
+            blocks = page.get_text("dict").get("blocks", [])
+            vector, covered = pdf_vector_block(page, blocks)
+            if vector is not None:
+                if stager.mode not in {"attachments", "multimodal"}:
+                    raise ConversionError(f"PDF 第 {page_number} 页含矢量图，请选择 attachments 或 multimodal 模式。")
+                blocks = [block for index, block in enumerate(blocks) if index not in covered] + [vector]
+            blocks = sorted(blocks, key=lambda item: (item.get("bbox", [0, 0])[1], item.get("bbox", [0, 0])[0]))
             found_content = False
             for block_index, block in enumerate(blocks, 1):
-                if block.get("type") == 0:
+                if block.get("type") == "vector":
+                    # Text/drawing coordinates are unrotated; get_pixmap's clip
+                    # uses rotated page coordinates. Preserve the displayed view.
+                    clip = fitz.Rect(block["bbox"]) * page.rotation_matrix
+                    pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), clip=clip, alpha=False)
+                    content.append(stager.add(pixmap.tobytes("png"), ".png", f"第-{page_number}-页-矢量图", f"第 {page_number} 页·矢量图区域（含区内文字及图片）"))
+                    vector_pages.append(page_number)
+                    warnings.append(f"第 {page_number} 页的矢量图已按所在区域渲染为图片；区内文字及位图随区域保留，不再单独重复输出。")
+                    found_content = True
+                elif block.get("type") == 0:
                     text = pdf_text_block(block)
                     if text:
                         content.append(text)
@@ -603,7 +671,7 @@ def convert_pdf(source: Path, stager: ImageStager) -> Conversion:
                 content.append(stager.add(pixmap.tobytes("png"), ".png", f"第-{page_number}-页", f"第 {page_number} 页·整页扫描"))
             pages.append("\n\n".join(content))
         page_count = len(document)
-    return Conversion("\n\n".join(pages), warnings, {"pages": page_count})
+    return Conversion("\n\n".join(pages), warnings, {"pages": page_count, "vector_pages": vector_pages})
 
 
 def convert_source(source: Path, stager: ImageStager) -> Conversion:

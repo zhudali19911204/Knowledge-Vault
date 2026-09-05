@@ -54,6 +54,7 @@ try {
         $relative = $_.FullName.Substring($productRoot.Length).TrimStart('\', '/')
         $parts = $relative -split '[\\/]'
         if ($parts[0] -in $excludedTopLevel) { return $false }
+        if ($relative -match '(^|[\\/])\.agents[\\/]tmp([\\/]|$)') { return $false }
         if ($relative -match '(^|[\\/])\.obsidian[\\/]workspace(?:-mobile)?\.json$') { return $false }
         if ($relative -match '(^|[\\/])\.obsidian[\\/]cache[\\/]') { return $false }
         if ($relative -match '(^|[\\/])__pycache__([\\/]|$)' -or $_.Extension -eq '.pyc') { return $false }

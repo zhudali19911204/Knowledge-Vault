@@ -13,6 +13,10 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+HAS_FITZ = importlib.util.find_spec("fitz") is not None
+if HAS_FITZ:
+    import fitz
+
 HAS_PPTX = importlib.util.find_spec("pptx") is not None
 if HAS_PPTX:
     from pptx import Presentation
@@ -152,6 +156,130 @@ class PowerPointCaptureTests(CaptureTestCase):
             with self.assertRaises(PermissionError):
                 converter.run_conversion(source, self.vault, "attachments", None)
         self.assertFalse(list((self.vault / "01_Inbox").iterdir()))
+
+
+@unittest.skipUnless(HAS_FITZ, "PyMuPDF unavailable; run with the installed knowledge-capture runtime Python")
+class PDFCaptureTests(CaptureTestCase):
+    def pdf(self, *, vector=True, bitmap=False, rotation=0, cropped=False, edge_label=False):
+        source = self.root / "input.pdf"
+        with fitz.open() as document:
+            page = document.new_page(width=400, height=500)
+            page.insert_text((40, 40), "Outside introduction.")
+            page.insert_text((40, 420), "Outside conclusion.")
+            if vector:
+                page.draw_rect(fitz.Rect(80, 130, 210, 190), color=(1, 0, 0), fill=(1, 0, 0))
+                page.insert_text((95, 160), "Node A")
+                page.draw_rect(fitz.Rect(80, 250, 210, 300), color=(0, 0, 1))
+                page.insert_text((95, 275), "Node B")
+                page.draw_line((145, 190), (145, 250), color=(0, 0, 1))
+            if edge_label:
+                page.insert_text((200, 220), "Long edge label extends beyond the diagram")
+            if bitmap:
+                page.insert_image(fitz.Rect(95, 175, 110, 185), stream=PNG)
+                page.insert_image(fitz.Rect(280, 80, 310, 110), stream=PNG)
+            if cropped:
+                page.set_cropbox(fitz.Rect(30, 20, 360, 470))
+            page.set_rotation(rotation)
+            document.save(source)
+        return source
+
+    def assert_red_shape_present(self, path):
+        pixmap = fitz.Pixmap(str(path))
+        samples = pixmap.samples
+        red_pixels = sum(
+            samples[i] > 200 and samples[i + 1] < 50 and samples[i + 2] < 50
+            for i in range(0, len(samples), pixmap.n)
+        )
+        self.assertGreater(red_pixels, 1000)
+        return pixmap
+
+    def test_vector_page_with_text_requires_image_mode(self):
+        source = self.pdf()
+        inspection = converter.inspect_source(source)
+        self.assertEqual(inspection["image_count"], 0)
+        self.assertEqual(inspection["vector_pages"], [1])
+        self.assertTrue(inspection["requires_image_mode"])
+        with self.assertRaises(converter.ConversionError):
+            converter.run_conversion(source, self.vault, "text", None)
+        self.assertFalse(list((self.vault / "01_Inbox").iterdir()))
+
+    def test_attachments_preserve_vectors_and_outside_text_without_duplicate_labels(self):
+        result, text = self.run_conversion(self.pdf())
+        self.assertEqual(result["attachments_written"], 1)
+        self.assertEqual(result["details"]["vector_pages"], [1])
+        self.assertEqual(text.count("Outside introduction."), 1)
+        self.assertEqual(text.count("Outside conclusion."), 1)
+        self.assertNotIn("Node A", text)
+        self.assertIn("第 1 页·矢量图区域", text)
+        self.assertTrue(any("第 1 页" in warning for warning in result["warnings"]))
+        files = list(Path(result["attachment_directory"]).glob("*.png"))
+        self.assertEqual(len(files), 1)
+        self.assert_red_shape_present(files[0])
+
+    def test_multimodal_receives_vector_region_and_applies_labels_once(self):
+        source = self.pdf()
+        original_hash = converter.sha256_file(source)
+        result = converter.prepare_multimodal(source, self.vault, None)
+        self.assertEqual(result["status"], "needs_multimodal")
+        manifest_path = Path(result["manifest"])
+        job_root = converter.validate_multimodal_job_path(manifest_path)
+        self.addCleanup(shutil.rmtree, job_root)
+        self.assertEqual(result["images_to_read"], 1)
+        self.assert_red_shape_present(result["images"][0]["path"])
+        draft = (job_root / "draft.md").read_text(encoding="utf-8")
+        self.assertIn("Outside introduction.", draft)
+        self.assertNotIn("Node A", draft)
+        Path(result["results_file"]).write_text(json.dumps({"images": [{
+            "id": result["images"][0]["id"], "markdown": "Node A -> Node B",
+            "confidence": "high", "uncertainties": [],
+        }]}), encoding="utf-8")
+        applied = converter.apply_multimodal(str(manifest_path), result["results_file"], self.vault, False)
+        text = Path(applied["markdown"]).read_text(encoding="utf-8")
+        self.assertEqual(text.count("Node A"), 1)
+        self.assertEqual(text.count("Outside introduction."), 1)
+        self.assertEqual(converter.sha256_file(source), original_hash)
+
+    def test_bitmaps_inside_vector_region_are_not_extracted_twice(self):
+        result, text = self.run_conversion(self.pdf(bitmap=True))
+        # One rendered vector region (including its bitmap), one outside bitmap.
+        self.assertEqual(result["attachments_written"], 2)
+        self.assertEqual(text.count("![[07_Attachments/"), 2)
+
+    def test_rotated_cropped_pages_keep_visible_vector_pixels(self):
+        for rotation in (0, 90, 180, 270):
+            with self.subTest(rotation=rotation):
+                _, text = self.run_conversion(self.pdf(rotation=rotation, cropped=True))
+                reference = text.split("![[", 1)[1].split("]]", 1)[0]
+                pixmap = self.assert_red_shape_present(self.vault / reference)
+                self.assertEqual(pixmap.width > pixmap.height, rotation in (90, 270))
+
+    def test_single_horizontal_or_vertical_vector_line_is_preserved(self):
+        for end in ((200, 150), (100, 250)):
+            with self.subTest(end=end):
+                source = self.root / "line.pdf"
+                with fitz.open() as document:
+                    page = document.new_page(width=400, height=500)
+                    page.insert_text((40, 40), "Outside text")
+                    page.draw_line((100, 150), end, color=(0, 0, 0), width=2)
+                    document.save(source)
+                self.assertTrue(converter.inspect_source(source)["requires_image_mode"])
+                result, _ = self.run_conversion(source)
+                self.assertEqual(result["attachments_written"], 1)
+
+    def test_intersecting_text_block_is_fully_included_in_rendered_region(self):
+        result, text = self.run_conversion(self.pdf(edge_label=True))
+        self.assertNotIn("Long edge label", text)
+        image_path = next(Path(result["attachment_directory"]).glob("*.png"))
+        pixmap = self.assert_red_shape_present(image_path)
+        self.assertGreater(pixmap.width, 500)
+
+    def test_plain_text_pdf_keeps_text_mode_without_attachments(self):
+        source = self.pdf(vector=False)
+        self.assertFalse(converter.inspect_source(source)["requires_image_mode"])
+        result, text = self.run_conversion(source, "text")
+        self.assertEqual(result["attachments_written"], 0)
+        self.assertEqual(result["details"]["vector_pages"], [])
+        self.assertIn("Outside introduction.", text)
 
 
 class TextCaptureTests(CaptureTestCase):

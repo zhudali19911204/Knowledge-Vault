@@ -82,6 +82,7 @@ if (-not $alreadyInitialized) {
         $destinationDirectory = Join-Path $vaultRoot $directoryName
         New-Item -ItemType Directory -Path $destinationDirectory | Out-Null
         foreach ($sourceEntry in @(Get-ChildItem -LiteralPath $source -Force)) {
+            if ($directoryName -eq ".agents" -and $sourceEntry.Name -eq "tmp") { continue }
             Copy-Item -LiteralPath $sourceEntry.FullName -Destination $destinationDirectory -Recurse -Force
         }
     }
