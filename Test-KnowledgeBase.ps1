@@ -57,6 +57,7 @@ foreach ($path in @(
     $captureLauncherPath,
     $captureScriptPath,
     $captureRequirementsPath,
+    (Join-Path $productRoot "Test-KnowledgeCapture.py"),
     (Join-Path $productRoot "Test-KnowledgeRouting.py"),
     $captureRulesPath,
     $organizeSkillPath,
@@ -74,6 +75,18 @@ Write-Host "Checking scripts and the pinned runtime..."
 & python -B (Join-Path $productRoot "Test-KnowledgeRouting.py")
 if ($LASTEXITCODE -ne 0) {
     throw "Knowledge routing regression tests failed."
+}
+$installedCaptureRuntime = (& python -B $captureLauncherPath --runtime-info | Out-String) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not inspect the installed knowledge capture runtime."
+}
+$captureTestPython = "python"
+if ($installedCaptureRuntime.ready) {
+    $captureTestPython = [string]$installedCaptureRuntime.python
+}
+& $captureTestPython -B (Join-Path $productRoot "Test-KnowledgeCapture.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge capture regression tests failed."
 }
 $parseFiles = @(
     "Initialize-KnowledgeBase.ps1",

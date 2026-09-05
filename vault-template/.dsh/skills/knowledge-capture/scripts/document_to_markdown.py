@@ -475,10 +475,12 @@ def convert_powerpoint(source: Path, stager: ImageStager) -> Conversion:
     if not module_available("pptx"):
         raise DependencyError("PowerPoint 转换需要 python-pptx；请按 scripts/requirements.txt 安装。")
     from pptx import Presentation
+    from pptx.shapes.picture import Picture
 
     presentation = Presentation(source)
     slides: list[str] = []
     warnings: list[str] = []
+    images_unavailable = 0
     for slide_number, slide in enumerate(presentation.slides, 1):
         title_text = slide.shapes.title.text.strip() if slide.shapes.title is not None else ""
         content = [f"## 幻灯片 {slide_number}{f'：{title_text}' if title_text else ''}"]
@@ -486,8 +488,29 @@ def convert_powerpoint(source: Path, stager: ImageStager) -> Conversion:
             if shape is slide.shapes.title:
                 continue
             location = f"幻灯片 {slide_number}·对象 {shape_index}"
-            if getattr(shape, "shape_type", None) == 13 and hasattr(shape, "image"):
-                content.append(stager.add(shape.image.blob, "." + shape.image.ext, f"幻灯片-{slide_number}-图片-{shape_index}", location))
+            # Picture also covers filled picture placeholders. `hasattr(image)`
+            # evaluates the property and can itself raise "no embedded image".
+            if isinstance(shape, Picture):
+                try:
+                    image = shape.image
+                    image_data, image_extension = image.blob, "." + image.ext
+                except (ValueError, KeyError, AttributeError, OSError):
+                    images_unavailable += 1
+                    embedded = shape._element.xpath("./p:blipFill/a:blip/@r:embed")
+                    linked = shape._element.xpath("./p:blipFill/a:blip/@r:link")
+                    if linked and not embedded:
+                        reason = "外部链接图片未内嵌到 PPT，未读取外部链接目标"
+                    elif embedded:
+                        reason = "内嵌图片引用失效或图片数据无法读取"
+                    else:
+                        reason = "图片对象没有可读取的内嵌图片引用"
+                    warning = f"{location}：{reason}；请在原 PPT 中核对，必要时将图片嵌入后重新转换。"
+                    warnings.append(warning)
+                    content.append(f"> [!warning] 图片未能提取\n> {warning}")
+                else:
+                    # Only image decoding errors are recoverable here. Staging
+                    # or output failures must still abort instead of losing data.
+                    content.append(stager.add(image_data, image_extension, f"幻灯片-{slide_number}-图片-{shape_index}", location))
             elif getattr(shape, "has_table", False):
                 rows = [[cell.text for cell in row.cells] for row in shape.table.rows]
                 content.append(markdown_table(rows))
@@ -507,7 +530,7 @@ def convert_powerpoint(source: Path, stager: ImageStager) -> Conversion:
             if notes_text:
                 content.extend(["### 讲者备注", notes_text])
         slides.append("\n\n".join(content))
-    return Conversion("\n\n".join(slides), warnings, {"slides": len(presentation.slides)})
+    return Conversion("\n\n".join(slides), warnings, {"slides": len(presentation.slides), "images_unavailable": images_unavailable})
 
 
 def pdf_text_block(block: dict) -> str:
@@ -648,7 +671,6 @@ def run_conversion(source: Path, vault: Path, mode: str, title_value: str | None
     inbox_path = unique_path(vault / "01_Inbox" / inbox_name)
     before_stat = source.stat()
     before_hash = inspection["sha256"]
-    copied: list[Path] = []
     with tempfile.TemporaryDirectory(prefix="knowledge-capture-") as temp_value:
         stager = ImageStager(Path(temp_value), attachment_dir, attachment_name, mode)
         conversion = convert_source(source, stager)
@@ -657,28 +679,43 @@ def run_conversion(source: Path, vault: Path, mode: str, title_value: str | None
         after_hash = sha256_file(source)
         if before_stat.st_size != after_stat.st_size or before_stat.st_mtime_ns != after_stat.st_mtime_ns or before_hash != after_hash:
             raise ConversionError("源文件在转换过程中发生变化，已停止写入。")
-        note = build_note(source, title, mode, before_hash, conversion)
-        try:
-            if mode == "attachments" and stager.records:
-                attachment_dir.mkdir(parents=True, exist_ok=True)
-                for record in stager.records:
-                    target = attachment_dir / record.filename
-                    shutil.copy2(record.source, target)
-                    copied.append(target)
-            temporary_note = inbox_path.with_suffix(inbox_path.suffix + ".tmp")
-            temporary_note.write_text(note, encoding="utf-8", newline="\n")
-            os.replace(temporary_note, inbox_path)
-        except Exception:
-            for path in copied:
-                path.unlink(missing_ok=True)
-            raise
+        return commit_conversion(source, title, mode, before_hash, inbox_path, conversion, stager)
+
+
+def commit_conversion(
+    source: Path,
+    title: str,
+    mode: str,
+    source_hash: str,
+    inbox_path: Path,
+    conversion: Conversion,
+    stager: ImageStager,
+) -> dict:
+    """Publish an already converted and source-verified document once."""
+    note = build_note(source, title, mode, source_hash, conversion)
+    copied: list[Path] = []
+    temporary_note = inbox_path.with_suffix(inbox_path.suffix + ".tmp")
+    try:
+        if mode == "attachments" and stager.records:
+            stager.destination.mkdir(parents=True, exist_ok=True)
+            for record in stager.records:
+                target = stager.destination / record.filename
+                shutil.copy2(record.source, target)
+                copied.append(target)
+        temporary_note.write_text(note, encoding="utf-8", newline="\n")
+        os.replace(temporary_note, inbox_path)
+    except Exception:
+        for path in copied:
+            path.unlink(missing_ok=True)
+        temporary_note.unlink(missing_ok=True)
+        raise
     return {
         "status": "ok",
         "source": str(source),
-        "source_sha256": before_hash,
+        "source_sha256": source_hash,
         "mode": mode,
         "markdown": str(inbox_path),
-        "attachment_directory": str(attachment_dir) if copied else None,
+        "attachment_directory": str(stager.destination) if copied else None,
         "images_processed": len(stager.records),
         "attachments_written": len(copied),
         "warnings": conversion.warnings,
@@ -729,8 +766,12 @@ def prepare_multimodal(source: Path, vault: Path, title_value: str | None) -> di
         if not source_is_unchanged(source, source_state):
             raise ConversionError("源文件在多模态准备过程中发生变化，已停止处理。")
         if not stager.records:
+            # Media parts can remain in the ZIP even when no picture can be
+            # extracted. Re-entering text conversion would reject that same ZIP
+            # as mixed layout and discard the useful per-object warnings.
+            result = commit_conversion(source, title, "text", source_state["sha256"], inbox_path, conversion, stager)
             shutil.rmtree(job_root)
-            return run_conversion(source, vault, "text", title_value)
+            return result
 
         draft_path = job_root / "draft.md"
         results_path = job_root / "results.json"
@@ -768,6 +809,8 @@ def prepare_multimodal(source: Path, vault: Path, title_value: str | None) -> di
             "results_file": str(results_path),
             "images": images,
             "images_to_read": sum(1 for image in images if image["model_readable"]),
+            "warnings": conversion.warnings,
+            "details": conversion.details,
             "results_contract": {
                 "images": [
                     {

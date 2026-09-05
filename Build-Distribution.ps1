@@ -94,6 +94,7 @@ try {
             "Knowledge-Vault-Harness/Initialize-KnowledgeBase.ps1",
             "Knowledge-Vault-Harness/Start-KnowledgeBase.cmd",
             "Knowledge-Vault-Harness/Test-KnowledgeBase.cmd",
+            "Knowledge-Vault-Harness/Test-KnowledgeCapture.py",
             "Knowledge-Vault-Harness/Test-KnowledgeRouting.py",
             "Knowledge-Vault-Harness/Build-DesktopDistribution.ps1",
             "Knowledge-Vault-Harness/package.json",

@@ -222,6 +222,16 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 
 安装后可用 `python ".dsh/skills/knowledge-capture/scripts/capture.py" --runtime-info` 检查隔离环境。图片识别由当前会话的多模态模型完成，不安装也不调用 Tesseract；当前模型不支持图片输入时，需要先切换模型。
 
+### 知识收转换 PPTX 报 `no embedded image`
+
+PPT 中的图片对象可能只有外部链接，或缺少可读取的内嵌图片。旧转换器读取该对象时会触发 `python-pptx` 异常，导致整份转换中断。
+
+修复后的转换器会保留其余内容，在缺图位置及“转换说明”中标明幻灯片、对象和原因，也支持提取已填充的图片占位符。原图和多模态模式均适用；图片缺失会明确报告，不会生成无效附件引用或自动读取外链目标。需要补全图片时，请在原 PPT 中核对并嵌入图片后重新转换。
+
+已有 Vault 使用自己的 `.dsh/skills/knowledge-capture/` 文件；只更新本工程模板不会自动更新已初始化的 Vault。
+
+可运行 `python -B Test-KnowledgeCapture.py` 验证图片异常处理、原图/多模态流程和文本写入。项目自检也会执行该测试，并优先使用已安装的知识收隔离环境；运行环境没有 `python-pptx` 时会明确跳过 PPT 测试，不自动安装依赖。测试仅使用临时生成的文档。
+
 ### 卸载重装后，原知识库已经被删除
 
 卸载程序会保留 `%LOCALAPPDATA%\KnowledgeVaultHarness` 中的模型设置、会话和上次选择的知识库路径。重新安装后，如果该知识库已被移动、删除或不再包含 `AGENTS.md` 与 `01_Inbox/`，应用会自动回退到安装包内的只读模板并正常打开，同时清理已失效的 Harness 工作区注册。请点击左侧“初始化知识库”创建新库，或使用“选择知识库”绑定已有库；这个恢复过程不会删除模型配置和会话日志。

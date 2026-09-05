@@ -48,6 +48,8 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 - 原图模式下创建合规编号的 `07_Attachments/07xx_标题/`；
 - 输出 JSON 清单，供完成前一次性核验。
 
+PowerPoint 中个别图片未内嵌、引用失效或无法读取时，脚本继续转换其余内容，并在原位置及“转换说明”中标明幻灯片、对象和原因。必须向用户报告这些缺失，不得宣称图片已全部提取；不读取外链目标，也不生成无效附件引用。附件或笔记写入失败仍按转换失败处理。
+
 ### 多模态识别
 
 多模态模式不调用任何本地或外部 OCR 引擎，也不安装 Tesseract。固定执行以下流程：
@@ -62,6 +64,8 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
    ```
 
    返回 `status: needs_multimodal` 时，记录 `manifest`、尚不存在的 `results_file` 及图片清单。此时尚未写入 Inbox；图片只存在于系统临时任务目录。
+
+   没有可提取图片时，脚本直接返回 `status: ok` 并写入文本及转换说明；此时不执行后续读图和应用步骤，仍需报告 `warnings` 中的缺图信息。
 
 2. **逐图读取、一次写结果**：仅对清单中 `model_readable: true` 的每个 `path` 调用 `read_image`，按原顺序识别全部可见信息。文字要忠实转写；表格要保留行列；图表要记录标题、轴、图例、数值和可直接观察的关系；流程图或示意图要保留节点与连接。不得补全看不清的文字、数值或关系。识别完成后按 `results_contract` 一次创建 `results_file`，每项写入对应 `id`、`markdown`、`confidence` 和实际存在的 `uncertainties`，不得先读或覆盖该文件。
 
