@@ -57,6 +57,7 @@ foreach ($path in @(
     $captureLauncherPath,
     $captureScriptPath,
     $captureRequirementsPath,
+    (Join-Path $productRoot "Test-KnowledgeRouting.py"),
     $captureRulesPath,
     $organizeSkillPath,
     $organizeScriptPath,
@@ -70,6 +71,10 @@ foreach ($path in @(
 }
 
 Write-Host "Checking scripts and the pinned runtime..."
+& python -B (Join-Path $productRoot "Test-KnowledgeRouting.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "Knowledge routing regression tests failed."
+}
 $parseFiles = @(
     "Initialize-KnowledgeBase.ps1",
     "Install-KnowledgeBase.ps1",
@@ -906,6 +911,7 @@ try {
     $organizeCards = [ordered]@{ cards = @(
         [pscustomobject]@{
             title = "Interpret Complete Rows"
+            topic_path = @("Organize Batch")
             kind = "concept"
             triggers = @("complete row")
             use = @("interpret a populated cost row")
@@ -924,6 +930,7 @@ try {
         },
         [pscustomobject]@{
             title = "Handle Missing Amounts"
+            topic_path = @("Organize Batch")
             kind = "procedure"
             triggers = @("missing amount")
             use = @("review a row whose amount is empty")
@@ -1141,7 +1148,7 @@ try {
     $filenameMatchNote = Join-Path $initializedVault "01_Inbox\Second Topic Checklist.md"
     [System.IO.File]::WriteAllText(
         $filenameMatchNote,
-        "---`ntitle: Unmatched Semantic Title`ntype: source`nstatus: ready`nroute_to: 02_Domains/Unmatched Semantic`nroute_confidence: 0.95`n---`n# Filename match`n",
+        "---`ntitle: Unmatched Semantic Title`ntype: source`nstatus: ready`nroute_to: 02_Domains/0202_Second Topic`nroute_confidence: 0.95`nroute_reason: Explicit topic selection`n---`n# Explicit directory selection`n",
         [System.Text.UTF8Encoding]::new($false)
     )
     [System.IO.File]::WriteAllText(
@@ -1154,12 +1161,12 @@ try {
     if (
         $LASTEXITCODE -ne 0 -or
         -not (Test-Path -LiteralPath $filenameMatchedCard) -or
-        ($filenameMatchOutput -join "`n") -notmatch '\[filename-match\]' -or
+        ($filenameMatchOutput -join "`n") -match '\[filename-match\]' -or
         (Test-Path -LiteralPath (Join-Path $initializedVault "02_Domains\0203_Unmatched Semantic")) -or
         (Get-Content -Raw -Encoding UTF8 -LiteralPath $filenameMatchedCard) -notmatch 'route_to: 02_Domains/0202_Second Topic' -or
         (Get-Content -Raw -Encoding UTF8 -LiteralPath $filenameMatchedCard) -notmatch 'route_reason:'
     ) {
-        throw "Knowledge router did not prioritize the existing filename-related folder."
+        throw "Knowledge router did not preserve the explicitly selected existing folder."
     }
 
     $salaryFolder = Join-Path $initializedVault "02_Domains\0203_Salary"
@@ -1175,7 +1182,7 @@ try {
     $salaryRouteNote = Join-Path $initializedVault "01_Inbox\$salaryCardName.md"
     [System.IO.File]::WriteAllText(
         $salaryRouteNote,
-        "---`ntitle: $salaryCardName`ntype: knowledge-skill`nstatus: ready`nroute_to: 05_Skills/Payroll Workflow`nroute_confidence: 0.95`nroute_reason: AI classified the SOP as a skill`n---`n# $salaryCardName`n",
+        "---`ntitle: $salaryCardName`ntype: knowledge-skill`nstatus: ready`nroute_to: 02_Domains/0203_Salary`nroute_confidence: 0.95`nroute_reason: Topic ownership selected 02_Domains/0203_Salary for this SOP`n---`n# $salaryCardName`n",
         [System.Text.UTF8Encoding]::new($false)
     )
     [System.IO.File]::WriteAllText(
@@ -1194,12 +1201,12 @@ try {
     if (
         $LASTEXITCODE -ne 0 -or
         -not (Test-Path -LiteralPath $salaryMatchedCard) -or
-        ($salaryMatchOutput -join "`n") -notmatch '\[filename-match\]' -or
+        ($salaryMatchOutput -join "`n") -match '\[filename-match\]' -or
         (Test-Path -LiteralPath (Join-Path $initializedVault "05_Skills\0504_Payroll Workflow")) -or
         $salaryMatchedContent -notmatch 'route_to: 02_Domains/0203_Salary' -or
         $salaryMatchedContent -notmatch 'route_reason:.*02_Domains/0203_Salary'
     ) {
-        throw "Knowledge router did not prioritize a unique cross-root index alias match."
+        throw "Knowledge router did not preserve topic ownership for a procedure."
     }
 
     $nestedRouteNote = Join-Path $initializedVault "01_Inbox\Nested Route.md"
@@ -1250,6 +1257,7 @@ try {
     $lowCards = [ordered]@{ cards = @(
         [pscustomobject]@{
             title = "Review Provisional Rule"
+            topic_path = @("Provisional Rules")
             kind = "concept"
             triggers = @("provisional rule")
             use = @("review a provisional rule")
@@ -1851,7 +1859,9 @@ try {
     $skillNames = @($skillsResponse.result.value.skills | ForEach-Object { [string]$_.name })
     $missingSkills = @($expectedSkills | Where-Object { $_ -notin $skillNames })
     if ($missingSkills.Count -gt 0) {
-        throw "Bundled skills are missing: $($missingSkills -join ', '). Found: $($skillNames -join ', ')"
+        $skillDiagnostics = @(Get-Content -LiteralPath $stderrPath, $stdoutPath -ErrorAction SilentlyContinue |
+            Select-String -Pattern 'skill|cwd|project root' | Select-Object -Last 20)
+        throw "Bundled skills are missing: $($missingSkills -join ', '). Found: $($skillNames -join ', '). Session: $($sessionResponse.result.value | ConvertTo-Json -Depth 5 -Compress). Diagnostics: $($skillDiagnostics -join [Environment]::NewLine)"
     }
 
     Write-Host "Release validation passed."
