@@ -51,6 +51,25 @@ class DependencyError(ConversionError):
     pass
 
 
+class SourceError(ConversionError):
+    def __init__(self, source: Path, error_code: str, message: str) -> None:
+        super().__init__(message)
+        self.source = source
+        self.error_code = error_code
+
+
+def source_access_error(source: Path, error: OSError) -> SourceError:
+    if isinstance(error, FileNotFoundError):
+        return SourceError(source, "source_not_found", f"源文件不存在，请核对完整路径：{source}")
+    return SourceError(
+        source,
+        "source_unreadable",
+        f"无法读取源文件，尚未开始解析内容：{source}。"
+        "请先关闭占用该文件的 Office/WPS 或预览窗口；若仍无法读取，再检查读取权限及 OneDrive 本地可用状态。"
+        f"系统信息：{error}",
+    )
+
+
 @dataclass
 class ImageRecord:
     identifier: str
@@ -152,18 +171,33 @@ def find_attachment_folder(vault_root: Path, title: str) -> tuple[str, Path]:
 
 
 def inspect_package_images(source: Path, prefix: str) -> int:
-    with zipfile.ZipFile(source) as package:
-        return sum(1 for name in package.namelist() if name.startswith(prefix) and not name.endswith("/"))
+    try:
+        with zipfile.ZipFile(source) as package:
+            return sum(1 for name in package.namelist() if name.startswith(prefix) and not name.endswith("/"))
+    except OSError as error:
+        raise source_access_error(source, error) from error
+    except zipfile.BadZipFile as error:
+        raise SourceError(
+            source,
+            "invalid_document_package",
+            f"源文件可以读取，但不是有效的 {source.suffix} 文档包：{source}。"
+            "请用原应用确认文件格式及是否加密或损坏；不能仅修改扩展名。",
+        ) from error
 
 
 def inspect_source(source: Path) -> dict:
     extension = source.suffix.lower()
+    try:
+        source_stat = source.stat()
+        source_hash = sha256_file(source)
+    except OSError as error:
+        raise source_access_error(source, error) from error
     result = {
         "source": str(source),
         "format": extension.lstrip("."),
-        "bytes": source.stat().st_size,
-        "modified_at": datetime.fromtimestamp(source.stat().st_mtime, timezone.utc).astimezone().isoformat(),
-        "sha256": sha256_file(source),
+        "bytes": source_stat.st_size,
+        "modified_at": datetime.fromtimestamp(source_stat.st_mtime, timezone.utc).astimezone().isoformat(),
+        "sha256": source_hash,
         "image_count": 0,
         "requires_image_mode": False,
         "missing_dependencies": [],
@@ -637,8 +671,12 @@ def validate_source(path_value: str | None) -> Path:
     if not path_value:
         raise ConversionError("请提供源文件路径。")
     source = Path(path_value).expanduser().resolve()
-    if not source.is_file():
-        raise ConversionError(f"源文件不存在或不是文件：{source}")
+    try:
+        is_file = source.is_file()
+    except OSError as error:
+        raise source_access_error(source, error) from error
+    if not is_file:
+        raise SourceError(source, "source_not_found", f"源文件不存在或不是文件，请核对完整路径：{source}")
     extension = source.suffix.lower()
     if extension in LEGACY:
         raise ConversionError(f"旧格式 {extension} 不能可靠直接转换；请先用原应用另存为新版 OOXML 格式。")
@@ -1018,6 +1056,9 @@ def main() -> int:
                 result = run_conversion(source, validate_vault(args.vault_root), args.mode, args.title)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
+    except SourceError as error:
+        print(json.dumps({"status": "error", "error_code": error.error_code, "source": str(error.source), "error": str(error)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        return 2
     except (ConversionError, DependencyError, zipfile.BadZipFile) as error:
         print(json.dumps({"status": "error", "error": str(error)}, ensure_ascii=False, indent=2), file=sys.stderr)
         return 2

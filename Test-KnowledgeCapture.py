@@ -3,8 +3,11 @@
 import base64
 import importlib.util
 import io
+import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -158,6 +161,71 @@ class TextCaptureTests(CaptureTestCase):
         result, text = self.run_conversion(source, "text")
         self.assertEqual(result["attachments_written"], 0)
         self.assertIn("first | 42", text)
+
+
+class SourceInspectionTests(CaptureTestCase):
+    def inspect_command(self, source):
+        completed = subprocess.run(
+            [sys.executable, "-B", str(SCRIPT.with_name("capture.py")), "--inspect", str(source)],
+            capture_output=True, encoding="utf-8", check=False,
+        )
+        output = completed.stdout if completed.returncode == 0 else completed.stderr
+        return completed.returncode, json.loads(output)
+
+    def test_chinese_path_survives_launcher_and_child_process(self):
+        source = self.root / "中文目录 with spaces" / "PCA主成分分析.csv"
+        source.parent.mkdir()
+        source.write_text("name,value\nfirst,42\n", encoding="utf-8")
+        code, result = self.inspect_command(source)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["source"], str(source))
+        self.assertEqual(result["sha256"], converter.sha256_file(source))
+
+    def test_missing_file_has_source_error_instead_of_parser_traceback(self):
+        code, result = self.inspect_command(self.root / "missing.pptx")
+        self.assertEqual(code, 2)
+        self.assertEqual(result["error_code"], "source_not_found")
+
+    def test_non_zip_pptx_is_distinguished_from_unreadable_file(self):
+        source = self.root / "invalid.pptx"
+        source.write_text("This is not an Office document.", encoding="utf-8")
+        code, result = self.inspect_command(source)
+        self.assertEqual(code, 2)
+        self.assertEqual(result["error_code"], "invalid_document_package")
+
+    def test_read_failure_is_reported_before_package_inspection(self):
+        source = self.root / "source.pptx"
+        source.write_bytes(b"test")
+        with patch.object(converter, "sha256_file", side_effect=PermissionError("access denied")):
+            with patch.object(converter, "inspect_package_images") as inspect_package:
+                with self.assertRaises(converter.SourceError) as raised:
+                    converter.inspect_source(source)
+                self.assertEqual(raised.exception.error_code, "source_unreadable")
+                inspect_package.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "Windows file sharing test")
+    def test_locked_file_has_read_error_instead_of_missing_package_error(self):
+        import ctypes
+        from ctypes import wintypes
+
+        source = self.root / "正在打开的演示.pptx"
+        source.write_bytes(b"test")
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        kernel.CreateFileW.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        # Read-only, exclusive handle recreates Office denying another reader.
+        handle = kernel.CreateFileW(str(source), 0x80000000, 0, None, 3, 0, None)
+        self.assertNotEqual(handle, wintypes.HANDLE(-1).value, ctypes.get_last_error())
+        try:
+            code, result = self.inspect_command(source)
+            self.assertEqual(code, 2)
+            self.assertEqual(result["error_code"], "source_unreadable")
+            self.assertIn("尚未开始解析", result["error"])
+            self.assertEqual(result["source"], str(source))
+        finally:
+            kernel.CloseHandle(handle)
 
 
 if __name__ == "__main__":

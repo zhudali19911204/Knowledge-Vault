@@ -22,6 +22,10 @@ description: 当用户输入“知识收”并希望把明确提供的 Excel、C
 python ".dsh/skills/knowledge-capture/scripts/capture.py" --inspect "<源文件>"
 ```
 
+Windows 中文路径必须作为独立参数传给 `capture.py`；排错也先用 `--inspect`，不要临时拼接 `python -c` 或把含路径的 Python 代码通过管道执行来绕过预检。错误日志里的 `�` 可能来自输出解码，不能仅凭乱码认定实际路径已损坏。
+
+预检返回 `source_not_found` 时核对完整路径；`source_unreadable` 表示还没开始解析，应先检查文件占用，再检查读取权限及 OneDrive 本地可用状态；`invalid_document_package` 表示文件可读但文档包无效，需核对真实格式、加密或损坏情况。文件被占用时请用户关闭对应 Office/WPS 或预览窗口，释放后只重试原来的 `--inspect`，不通过换解析库或安装依赖处理文件锁。
+
 仅当 PDF、Word 或 PowerPoint 含图片、图表、扫描页等图文混排内容时，且用户尚未指定处理方式，询问一次：
 
 1. **原图图文模式（attachments）**：把图片按原出现位置复制到 `07_Attachments/`，在 Markdown 对应位置嵌入，保留图文关系。

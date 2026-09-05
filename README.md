@@ -222,6 +222,12 @@ python ".dsh/skills/knowledge-capture/scripts/capture.py" `
 
 安装后可用 `python ".dsh/skills/knowledge-capture/scripts/capture.py" --runtime-info` 检查隔离环境。图片识别由当前会话的多模态模型完成，不安装也不调用 Tesseract；当前模型不支持图片输入时，需要先切换模型。
 
+### 知识收打开 PPTX 报 `PackageNotFoundError` 或拒绝访问
+
+先用知识收的 `capture.py --inspect "<源文件>"` 检查。`source_not_found` 表示路径不存在或不是文件；`source_unreadable` 表示文件无法读取，尚未开始解析，应检查是否被 Office/WPS 或预览窗口占用，以及读取权限、OneDrive 本地可用状态；`invalid_document_package` 表示文件可读但文档包无效，需要核对真实格式、是否加密或损坏。
+
+`python-pptx` 直接打开路径时，可能把文件占用导致的读取失败报告为 `PackageNotFoundError`。关闭占用程序后重试预检；换解析库或安装依赖不能解除文件锁。中文路径应作为独立参数传给启动器，不要拼进临时 Python 代码；日志中的乱码也可能只是输出解码问题。
+
 ### 知识收转换 PPTX 报 `no embedded image`
 
 PPT 中的图片对象可能只有外部链接，或缺少可读取的内嵌图片。旧转换器读取该对象时会触发 `python-pptx` 异常，导致整份转换中断。
@@ -230,7 +236,7 @@ PPT 中的图片对象可能只有外部链接，或缺少可读取的内嵌图�
 
 已有 Vault 使用自己的 `.dsh/skills/knowledge-capture/` 文件；只更新本工程模板不会自动更新已初始化的 Vault。
 
-可运行 `python -B Test-KnowledgeCapture.py` 验证图片异常处理、原图/多模态流程和文本写入。项目自检也会执行该测试，并优先使用已安装的知识收隔离环境；运行环境没有 `python-pptx` 时会明确跳过 PPT 测试，不自动安装依赖。测试仅使用临时生成的文档。
+可运行 `python -B Test-KnowledgeCapture.py` 验证文件占用、中文路径、无效文档包、图片异常处理、原图/多模态流程和文本写入。项目自检也会执行该测试，并优先使用已安装的知识收隔离环境；运行环境没有 `python-pptx` 时会明确跳过 PPT 测试，不自动安装依赖。测试仅使用临时生成的文档。
 
 ### 卸载重装后，原知识库已经被删除
 
